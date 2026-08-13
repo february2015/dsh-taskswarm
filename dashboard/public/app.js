@@ -40,6 +40,20 @@ function escapeHtml(str) {
   return div.innerHTML;
 }
 
+/**
+ * dsh-buju batch phase → dashboard (TaskPlane) vocabulary.
+ *
+ * dsh persists the BatchPhase as 'running' / 'complete' while the ported
+ * renderers switch on 'executing' / 'completed' (progress bar "done" state,
+ * current-wave highlight). 'planning' / 'paused' / 'aborted' pass through
+ * unchanged; unknown values are kept as-is so the badge never blank-falls.
+ */
+function normalizeBatchPhase(phase) {
+  if (phase === "running") return "executing";
+  if (phase === "complete") return "completed";
+  return phase;
+}
+
 /** Format token count as human-readable (e.g., 1.2k, 45k, 1.2M). */
 function formatTokens(n) {
   if (!n || n === 0) return "0";
@@ -485,8 +499,9 @@ function renderHeader(batch) {
     return;
   }
   $batchId.textContent = batch.batchId;
-  $batchPhase.textContent = batch.phase;
-  $batchPhase.className = `header-badge badge-phase phase-${batch.phase}`;
+  const phase = normalizeBatchPhase(batch.phase);
+  $batchPhase.textContent = phase;
+  $batchPhase.className = `header-badge badge-phase phase-${phase}`;
 }
 
 // ─── Render: Summary ────────────────────────────────────────────────────────
@@ -502,6 +517,8 @@ function renderSummary(batch) {
   }
 
   const tasks = batch.tasks || [];
+  // dsh persists 'running'/'complete'; renderers below switch on 'executing'/'completed'.
+  const batchPhase = normalizeBatchPhase(batch.phase);
   const total = tasks.length;
   const succeeded = tasks.filter(t => t.status === "succeeded").length;
   const running   = tasks.filter(t => t.status === "running").length;
@@ -574,15 +591,15 @@ function renderSummary(batch) {
     const fillPct = ws.total > 0 ? (ws.checked / ws.total) * 100 : 0;
     const checkboxDone = ws.checked === ws.total && ws.total > 0;
     const pastWave = ws.waveIdx < currentWaveIdx;
-    const batchDone = batch.phase === "completed";
+    const batchDone = batchPhase === "completed";
     // TP-178: During merging, only past waves are truly done. The current wave's
     // checkboxDone/allSucceeded can be true (tasks finished) but the wave itself
     // isn't done until the merge completes. (#493)
-    const isMerging = batch.phase === "merging";
+    const isMerging = batchPhase === "merging";
     const isDone = batchDone || pastWave || (!isMerging && (checkboxDone || ws.allSucceeded));
     const isMergingWave = isMerging && ws.waveIdx === currentWaveIdx;
-    const isCurrent = ws.waveIdx === currentWaveIdx && (batch.phase === "executing" || isMerging);
-    const isFuture = ws.waveIdx > currentWaveIdx && (batch.phase === "executing" || isMerging);
+    const isCurrent = ws.waveIdx === currentWaveIdx && (batchPhase === "executing" || isMerging);
+    const isFuture = ws.waveIdx > currentWaveIdx && (batchPhase === "executing" || isMerging);
 
     const fillClass = isDone ? "pct-hi" : fillPct > 50 ? "pct-mid" : fillPct > 0 ? "pct-low" : "pct-0";
     const fillWidth = isDone ? 100 : fillPct;
@@ -670,9 +687,9 @@ function renderSummary(batch) {
     let wavesHtml = '<span style="color:var(--text-muted); font-weight:600; margin-right:4px;">Waves</span>';
     batch.wavePlan.forEach((taskIds, i) => {
       // TP-178: During merging, only past waves are done; current wave shows merging state (#493)
-      const isDone = i < waveIdx || batch.phase === "completed";
-      const isCurrent = i === waveIdx && (batch.phase === "executing" || batch.phase === "merging");
-      const isMergingChip = i === waveIdx && batch.phase === "merging";
+      const isDone = i < waveIdx || batchPhase === "completed";
+      const isCurrent = i === waveIdx && (batchPhase === "executing" || batchPhase === "merging");
+      const isMergingChip = i === waveIdx && batchPhase === "merging";
       const cls = isDone ? "done" : isMergingChip ? "current merging" : isCurrent ? "current" : "";
       // #484: Show lane parallelization within each wave. Group taskIds by
       // their assigned lane: tasks on the same lane render with `→` (serial),
@@ -1980,6 +1997,21 @@ function viewConversation(sessionName) {
   }
 
   closeViewer();
+
+  // Degraded data (no laneSessionId): show the empty state instead of polling
+  // a bogus /api/conversation/:prefix endpoint every 2s. No error dialog.
+  if (!sessionName) {
+    viewerMode = 'conversation';
+    viewerTarget = '';
+    autoScrollOn = false;
+    $terminalTitle.textContent = 'Worker Conversation — (no session)';
+    $autoScrollText.textContent = 'Follow feed';
+    $autoScrollCheckbox.checked = false;
+    $terminalPanel.style.display = '';
+    $terminalBody.innerHTML = '<div class="conv-empty">No conversation events yet…</div>';
+    $terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+    return;
+  }
 
   viewerMode = 'conversation';
   viewerTarget = sessionName;
