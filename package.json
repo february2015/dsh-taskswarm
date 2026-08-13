@@ -35,6 +35,10 @@
       "types": "./lib/worker/runner.d.ts",
       "default": "./lib/worker/runner.js"
     },
+    "./demo": {
+      "types": "./lib/demo.d.ts",
+      "default": "./lib/demo.js"
+    },
     "./core/*": "./lib/core/*.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",

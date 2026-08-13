@@ -34,34 +34,30 @@ dsh-buju/
 
 ## 状态
 
-**开发中（v0.1）**——核心引擎与命令层已实现并通过测试：
+**开发中（v0.1）**——核心引擎与命令层已实现并通过测试，且已在**真实 DSH 进程中真机验证**：
 
 ```
 npm install && npm run build && npm test
 # 9/9 通过：core 单元测试 + 引擎集成测试（2 任务并行 + 依赖波次 + worktree 隔离 + orch 合并）+ 插件冒烟测试
 ```
 
-| 模块 | 状态 |
-|---|---|
-| core（git/naming/mailbox/task/discover/worktree/status） | ✅ 测试通过 |
-| engine（waves/lanes + 状态持久化） | ✅ 集成测试通过（并行性已验证） |
-| /orch 命令（10 个）+ 4 个桥接工具 | ✅ 注册冒烟测试通过 |
-| worker bundle（headless runner + startup） | ✅ 编译通过，待真机验证 |
-| 接入 DSH web profile | ⏳ 下一步（安装 + 重启后 /orch 可用） |
+| 模块                                                      | 状态                                                                                                     |
+| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
+| core（git/naming/mailbox/task/discover/worktree/status）  | ✅ 测试通过                                                                                                 |
+| engine（waves/lanes + 状态持久化）                             | ✅ 集成测试通过（并行性已验证）                                                                                       |
+| /orch 命令（10 个）+ 4 个桥接工具                                 | ✅ 注册冒烟测试通过                                                                                             |
+| **真实 DSH 进程验证**（`dsh --profile buju-verify`，沙箱 profile） | ✅ 完整 batch 跑通：/buju-init → /orch-plan → /orch → /orch-status                                           |
+| **真实 LLM worker**                                       | ✅ 2 个 worker 并行执行（deepseek-v4-flash），task_runner 逐步推进 + checkpoint 提交 + merge 进 `buju/orch`，产物文件内容验证通过 |
+| 接入 web profile                                          | ✅ 已装入 bundles（重启 dsh web 后 /orch 在 GUI 会话可用）                                                           |
 
-## 安装到 DSH（下一步）
+## 安装到 DSH
 
 ```bash
 cd ~/myProject/dsh-buju && npm run build
-# 1. orchestrator → web profile
+# 1. orchestrator → web profile（已做；重启 dsh web 生效）
 dsh plugin --profile web add ~/myProject/dsh-buju
-#    在 ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles 追加 "dsh-buju"
-# 2. （headless worker 模式）worker profile
-dsh --profile buju-worker                    # 首次自动初始化
-#    在 ~/.dsh/profiles/buju-worker/package.json 设 bundles: ["@deepseek-ai/dsh-base"]
-#    在 cordis.patch.yml 插入 dsh-buju/worker/startup + dsh-buju/worker/runner
-dsh plugin --profile buju-worker add ~/myProject/dsh-buju
-# 3. 重启 dsh web，会话里 /buju-init → /orch all → /orch-status
+#    ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles 已追加 "dsh-buju"
+# 2. 重启 dsh web 后，会话里：/buju-init → /orch all → /orch-status
 ```
 
-> 默认 `host: in-process`（worker 为进程内 DSH agent，无需额外 profile）；`host: headless` 走 `dsh --profile buju-worker` 子进程。
+> 默认 `host: in-process`（worker 为进程内 DSH agent，已验证）；`host: headless` 走 `dsh --profile buju-worker` 子进程（worker bundle 已就绪，见 `src/worker/`）。

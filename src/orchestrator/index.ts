@@ -76,8 +76,10 @@ function err(text: string): CommandResult {
 }
 
 function agentCwd(invocation: CommandInvocation): string | undefined {
-  const meta = (invocation.agent as { session?: { meta?: { cwd?: string } } } | undefined)?.session?.meta
-  return meta?.cwd
+  const session = (invocation.agent as {
+    session?: { header?: { cwd?: string }; meta?: { cwd?: string } }
+  } | undefined)?.session
+  return session?.header?.cwd ?? session?.meta?.cwd
 }
 
 export function apply(ctx: Context, config: Config): void {
@@ -164,7 +166,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-status',
     description: 'show the current Buju batch and lane progress',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state: BatchState | null = ref.engine.status()
       return state ? ok(formatBatchStatus(state)) : ok('No Buju batch has been run yet in this repo. Start one with /orch.')
@@ -174,7 +175,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-pause',
     description: 'pause the Buju batch after the current wave',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.pause() ? ok('Batch paused after the current wave.') : err('No running batch to pause.')),
   })
@@ -182,7 +182,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-resume',
     description: 'resume a paused Buju batch',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.resume() ? ok('Batch resumed.') : err('No paused batch to resume.')),
   })
@@ -190,7 +189,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-abort',
     description: 'abort the Buju batch after the current wave (kills running lanes)',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.abort() ? ok('Batch abort requested.') : err('No running batch to abort.')),
   })
@@ -209,7 +207,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-sessions',
     description: 'list active Buju lanes and their worktrees',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state = ref.engine.status()
       if (!state) return ok('No batch yet.')
@@ -222,7 +219,6 @@ export function apply(ctx: Context, config: Config): void {
   ctx.commands.register({
     name: 'orch-integrate',
     description: 'merge the buju/orch integration branch into the working branch',
-    input: { hint: '' },
     handler: (invocation) => withEngine(invocation, (ref) => {
       const result = ref.engine.integrate()
       return result.ok ? ok(`Integrated: ${result.message}`) : err(`Integration failed: ${result.message}`)
