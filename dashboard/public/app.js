@@ -1,0 +1,2799 @@
+/**
+ * Orchestrator Web Dashboard — Frontend
+ *
+ * Connects to SSE endpoint for live state updates.
+ * Zero dependencies, vanilla JS.
+ */
+
+// ─── Helpers ────────────────────────────────────────────────────────────────
+
+function formatDuration(ms) {
+  if (!ms || ms <= 0) return "—";
+  const totalSec = Math.floor(ms / 1000);
+  const h = Math.floor(totalSec / 3600);
+  const m = Math.floor((totalSec % 3600) / 60);
+  const s = totalSec % 60;
+  if (h > 0) return `${h}h ${String(m).padStart(2, "0")}m`;
+  return `${m}m ${String(s).padStart(2, "0")}s`;
+}
+
+function relativeTime(epochOrIso) {
+  if (!epochOrIso) return "";
+  const ts = typeof epochOrIso === "string" ? new Date(epochOrIso).getTime() : epochOrIso;
+  if (isNaN(ts)) return "";
+  const diff = Date.now() - ts;
+  if (diff < 60000) return `${Math.floor(diff / 1000)}s ago`;
+  if (diff < 3600000) return `${Math.floor(diff / 60000)}m ago`;
+  return `${Math.floor(diff / 3600000)}h ago`;
+}
+
+function pctClass(pct) {
+  if (pct >= 100) return "pct-hi";
+  if (pct >= 50) return "pct-mid";
+  if (pct > 0) return "pct-low";
+  return "pct-0";
+}
+
+function escapeHtml(str) {
+  const div = document.createElement("div");
+  div.textContent = str;
+  return div.innerHTML;
+}
+
+/** Format token count as human-readable (e.g., 1.2k, 45k, 1.2M). */
+function formatTokens(n) {
+  if (!n || n === 0) return "0";
+  if (n >= 1_000_000) return (n / 1_000_000).toFixed(1) + "M";
+  if (n >= 1_000) return (n / 1_000).toFixed(1) + "k";
+  return String(n);
+}
+
+function formatCost(usd) {
+  if (!usd || usd === 0) return "";
+  if (usd < 0.01) return `$${usd.toFixed(4)}`;
+  if (usd < 1) return `$${usd.toFixed(3)}`;
+  return `$${usd.toFixed(2)}`;
+}
+
+/**
+ * TP-107: Check if a lane has a live agent via the Runtime V2 registry.
+ * Returns true/false if registry data is available, null if no V2 data.
+ */
+function isLaneAliveV2(laneNumber) {
+  if (!currentData || !currentData.runtimeRegistry || !currentData.runtimeRegistry.agents) return null;
+  const agents = Object.values(currentData.runtimeRegistry.agents);
+  const laneAgents = agents.filter(a => a.laneNumber === laneNumber);
+  if (laneAgents.length === 0) return null;
+  return laneAgents.some(a => a.status === 'running' || a.status === 'spawning');
+}
+
+/**
+ * TP-107: Merge Runtime V2 lane snapshot data onto legacy lane state.
+ * V2 fields take precedence when present; legacy fields are preserved as fallback.
+ */
+function mergeV2LaneSnapshot(legacyLs, v2snap) {
+  const base = legacyLs ? { ...legacyLs } : {};
+  // Overlay V2 fields from nested worker snapshot onto flat legacy shape.
+  // RuntimeLaneSnapshot has worker: { status, elapsedMs, toolCalls, contextPct, ... }
+  const w = v2snap.worker;
+  if (w) {
+    // Map V2 agent status to legacy dashboard status strings
+    if (w.status) {
+      const statusMap = { running: 'running', spawning: 'running', exited: 'done', crashed: 'error', killed: 'done', timed_out: 'error', wrapping_up: 'running' };
+      base.workerStatus = statusMap[w.status] || w.status;
+    }
+    if (w.elapsedMs != null) base.workerElapsed = w.elapsedMs;
+    if (w.contextPct != null) base.workerContextPct = w.contextPct;
+    if (w.toolCalls != null) base.workerToolCount = w.toolCalls;
+    if (w.lastTool) base.workerLastTool = w.lastTool;
+    if (w.costUsd != null) base.workerCostUsd = w.costUsd;
+    if (w.inputTokens != null) base.workerInputTokens = w.inputTokens;
+    if (w.outputTokens != null) base.workerOutputTokens = w.outputTokens;
+    if (w.cacheReadTokens != null) base.workerCacheReadTokens = w.cacheReadTokens;
+    if (w.cacheWriteTokens != null) base.workerCacheWriteTokens = w.cacheWriteTokens;
+  }
+  if (v2snap.taskId) base.taskId = v2snap.taskId;
+  if (v2snap.batchId) base.batchId = v2snap.batchId;
+  // Enrich progress display from V2 snapshot
+  if (v2snap.progress) {
+    base._v2Progress = v2snap.progress;
+  }
+  return base;
+}
+
+function isReviewerActiveForTask(ls, task) {
+  if (!ls || !task) return false;
+  return !!(ls.reviewerStatus === "running" && task.status === "running" && (!ls.taskId || ls.taskId === task.taskId));
+}
+
+/** Build a compact token summary string from lane state sidecar data.
+ *  Display: ↑total_input ↓output (cost)
+ *  Anthropic splits input into: uncached `input` + `cacheRead`.
+ *  Both represent tokens the model processed as input.
+ *  We show the combined figure as ↑ for clarity.
+ */
+function tokenSummaryFromLaneState(ls) {
+  if (!ls) return "";
+  const inp = ls.workerInputTokens || 0;
+  const out = ls.workerOutputTokens || 0;
+  const cr = ls.workerCacheReadTokens || 0;
+  const cw = ls.workerCacheWriteTokens || 0;
+  const cost = ls.workerCostUsd || 0;
+  const totalIn = inp + cr; // uncached + cached = total input processed
+  if (totalIn === 0 && out === 0) return "";
+  let s = `↑${formatTokens(totalIn)} ↓${formatTokens(out)}`;
+  if (cost > 0) s += ` ${formatCost(cost)}`;
+  return s;
+}
+
+function tokenSummaryFromReviewerLaneState(ls) {
+  if (!ls) return "";
+  const inp = ls.reviewerInputTokens || 0;
+  const out = ls.reviewerOutputTokens || 0;
+  const cr = ls.reviewerCacheReadTokens || 0;
+  const cw = ls.reviewerCacheWriteTokens || 0;
+  const cost = ls.reviewerCostUsd || 0;
+  const totalIn = inp + cr; // uncached + cached = total input processed
+  if (totalIn === 0 && out === 0) return "";
+  let s = `↑${formatTokens(totalIn)} ↓${formatTokens(out)}`;
+  if (cost > 0) s += ` ${formatCost(cost)}`;
+  return s;
+}
+
+/** Build compact telemetry badge HTML for retry/compaction indicators.
+ *  Only shows badges when telemetry data has meaningful values.
+ *  @param {object|null} tel - Telemetry data for a lane (from currentData.telemetry[prefix])
+ *  @param {boolean} [suppressRetry=false] - When true, hide the retrying badge
+ *    (used when reviewer is active — long tool calls trigger false retry signals)
+ *  @returns {string} HTML string with badges, or "" if nothing to show
+ */
+function telemetryBadgesHtml(tel, suppressRetry) {
+  if (!tel) return "";
+  let badges = "";
+  if (tel.retryActive && !suppressRetry) {
+    const err = tel.lastRetryError ? ` — ${tel.lastRetryError}` : "";
+    badges += `<span class="telem-badge telem-retry-active" title="Retry in progress${escapeHtml(err)}">🔄 retrying</span>`;
+  } else if (tel.retries > 0 && !suppressRetry) {
+    badges += `<span class="telem-badge telem-retry" title="${tel.retries} auto-retry event(s)">🔄 ${tel.retries}</span>`;
+  }
+  if (tel.compactions > 0) {
+    badges += `<span class="telem-badge telem-compaction" title="${tel.compactions} context compaction(s)">🗜 ${tel.compactions}</span>`;
+  }
+  return badges;
+}
+
+// ─── Copy to Clipboard ──────────────────────────────────────────────────────
+
+let toastEl = null;
+let toastTimer = null;
+
+function showCopyToast(text) {
+  if (!toastEl) {
+    toastEl = document.createElement("div");
+    toastEl.className = "copy-toast";
+    document.body.appendChild(toastEl);
+  }
+  toastEl.textContent = `Copied: ${text}`;
+  toastEl.classList.add("visible");
+  clearTimeout(toastTimer);
+  toastTimer = setTimeout(() => toastEl.classList.remove("visible"), 2000);
+}
+
+function copySessionId(sessionName) {
+  // Retained for potential future use but no longer rendered in the UI.
+  navigator.clipboard.writeText(sessionName).then(() => {
+    showCopyToast(`session ${sessionName}`);
+    const btn = document.querySelector(`[data-session="${sessionName}"]`);
+    if (btn) {
+      btn.classList.add("copied");
+      setTimeout(() => btn.classList.remove("copied"), 1500);
+    }
+  }).catch(() => {
+    // Fallback: select the text
+    const btn = document.querySelector(`[data-session="${sessionName}"]`);
+    if (btn) {
+      const range = document.createRange();
+      range.selectNodeContents(btn);
+      window.getSelection().removeAllRanges();
+      window.getSelection().addRange(range);
+    }
+  });
+}
+
+
+
+// ─── DOM References ─────────────────────────────────────────────────────────
+
+const $ = (id) => document.getElementById(id);
+
+const $batchId        = $("batch-id");
+const $batchPhase     = $("batch-phase");
+const $connDot        = $("conn-dot");
+const $lastUpdate     = $("last-update");
+const $progressBarBg  = $("progress-bar-bg");
+const $overallPct     = $("overall-pct");
+const $summaryCounts  = $("summary-counts");
+const $summaryElapsed = $("summary-elapsed");
+const $summaryWaves   = $("summary-waves");
+const $lanesTasksBody = $("lanes-tasks-body");
+const $mergeBody      = $("merge-body");
+const $errorsPanel    = $("errors-panel");
+const $errorsBody     = $("errors-body");
+const $footerInfo     = $("footer-info");
+const $content        = $("content");
+const $historySelect  = $("history-select");
+const $historyPanel   = $("history-panel");
+const $historyBody    = $("history-body");
+
+// ─── Repo Filter State ──────────────────────────────────────────────────────
+
+const $repoFilter = $("repo-filter");
+let selectedRepo = "";       // "" means "All repos"
+let knownRepos = [];         // sorted list of known repo IDs
+let repoFilterVisible = false;
+
+// ─── History State ──────────────────────────────────────────────────────────
+
+let historyList = [];  // compact batch summaries
+let viewingHistoryId = null; // batchId if viewing history, null if live
+
+// ─── Viewer State ───────────────────────────────────────────────────────────
+
+let viewerMode = null;   // "conversation" | "status-md" | null
+let viewerTarget = null; // session name (conversation) or taskId (status-md)
+let lastBatchId = null;  // TP-178: track batchId for stale viewer detection (#487)
+
+// #507: Debounce the no-batch transition. A single missed poll happens
+// transiently during batch-state.json writes at batch startup, and was
+// causing the dashboard to flash the previous batch's history view before
+// switching to the new live batch. Require N consecutive no-batch polls
+// before clearing the viewer / showing history. With the server's 2s
+// POLL_INTERVAL, a threshold of 3 corresponds to ~6s of confirmed silence —
+// well past the typical batch-state.json write window (sub-second) while
+// still cleaning up promptly when a batch genuinely ends.
+let consecutiveNoBatchPolls = 0;
+const NO_BATCH_DEBOUNCE_THRESHOLD = 3;
+
+// ─── Repo Helpers ───────────────────────────────────────────────────────────
+
+/**
+ * Build a sorted, deduplicated list of repo IDs from the batch payload.
+ * Returns empty array when mode !== "workspace" or when fewer than 2 repos.
+ */
+function buildRepoSet(batch) {
+  if (!batch || batch.mode !== "workspace") return [];
+
+  const repos = new Set();
+  for (const lane of (batch.lanes || [])) {
+    if (lane.repoId) repos.add(lane.repoId);
+  }
+  for (const task of (batch.tasks || [])) {
+    const rid = task.resolvedRepoId || task.repoId;
+    if (rid) repos.add(rid);
+  }
+  for (const mr of (batch.mergeResults || [])) {
+    for (const rr of (mr.repoResults || [])) {
+      if (rr.repoId) repos.add(rr.repoId);
+    }
+  }
+  const sorted = Array.from(repos).sort();
+  return sorted.length >= 2 ? sorted : [];
+}
+
+/**
+ * Update the repo filter dropdown options and visibility.
+ * Resets selection to "All repos" if the previously selected repo disappeared.
+ */
+function updateRepoFilter(repos) {
+  knownRepos = repos;
+  const shouldShow = repos.length >= 2;
+
+  if (shouldShow !== repoFilterVisible) {
+    $repoFilter.style.display = shouldShow ? "" : "none";
+    repoFilterVisible = shouldShow;
+  }
+
+  if (!shouldShow) {
+    selectedRepo = "";
+    return;
+  }
+
+  // If selected repo disappeared, reset to "All"
+  if (selectedRepo && !repos.includes(selectedRepo)) {
+    selectedRepo = "";
+  }
+
+  // Rebuild options only if repo set changed
+  const currentOpts = Array.from($repoFilter.options).slice(1).map(o => o.value);
+  const changed = currentOpts.length !== repos.length || currentOpts.some((v, i) => v !== repos[i]);
+  if (changed) {
+    // Preserve selection
+    const prev = selectedRepo;
+    $repoFilter.innerHTML = '<option value="">All repos</option>';
+    for (const r of repos) {
+      const opt = document.createElement("option");
+      opt.value = r;
+      opt.textContent = r;
+      $repoFilter.appendChild(opt);
+    }
+    $repoFilter.value = prev;
+  }
+}
+
+/** Get the effective repo ID for a task (prefer resolvedRepoId, fallback repoId). */
+function taskRepoId(task) {
+  return task.resolvedRepoId || task.repoId || undefined;
+}
+
+/** Render a repo badge span. Returns "" if repoId is falsy or repos not active. */
+function repoBadgeHtml(repoId, extraClass) {
+  if (!repoId || knownRepos.length < 2) return "";
+  return `<span class="repo-badge ${extraClass || ""}" title="Repo: ${escapeHtml(repoId)}">${escapeHtml(repoId)}</span>`;
+}
+
+function parseSegmentId(segmentId) {
+  if (!segmentId || typeof segmentId !== "string") return null;
+  const sep = segmentId.indexOf("::");
+  if (sep <= 0 || sep >= segmentId.length - 2) return null;
+  return {
+    taskId: segmentId.slice(0, sep),
+    repoId: segmentId.slice(sep + 2),
+  };
+}
+
+function segmentProgressText(segmentInfo) {
+  if (!segmentInfo) return "";
+  const repo = segmentInfo.repoId || "unknown";
+  if (segmentInfo.index && segmentInfo.total) {
+    return `Segment ${segmentInfo.index}/${segmentInfo.total}: ${repo}`;
+  }
+  return `Segment: ${repo}`;
+}
+
+function buildSegmentStatusMap(batch) {
+  const map = new Map();
+  for (const seg of (batch?.segments || [])) {
+    if (seg && typeof seg.segmentId === "string") {
+      map.set(seg.segmentId, seg.status || "pending");
+    }
+  }
+  return map;
+}
+
+function taskSegmentProgress(task, segmentStatusMap, forcedActiveSegmentId) {
+  const segmentIds = Array.isArray(task?.segmentIds)
+    ? task.segmentIds.filter(id => typeof id === "string")
+    : [];
+  // Repo-singleton (or repo-mode) tasks should stay visually clean.
+  if (segmentIds.length <= 1) return null;
+
+  const activeSegmentId = forcedActiveSegmentId || task.activeSegmentId;
+  let currentSegmentId = activeSegmentId && segmentIds.includes(activeSegmentId)
+    ? activeSegmentId
+    : null;
+
+  if (!currentSegmentId) {
+    if (task.status === "pending" || task.status === "running") {
+      currentSegmentId = segmentIds.find((id) => {
+        const status = segmentStatusMap.get(id);
+        return !["succeeded", "failed", "stalled", "skipped"].includes(status);
+      }) || segmentIds[segmentIds.length - 1];
+    } else {
+      currentSegmentId = segmentIds[segmentIds.length - 1];
+    }
+  }
+
+  const idx = Math.max(0, segmentIds.indexOf(currentSegmentId));
+  const parsed = parseSegmentId(currentSegmentId);
+  return {
+    index: idx + 1,
+    total: segmentIds.length,
+    repoId: parsed?.repoId || taskRepoId(task) || undefined,
+    segmentId: currentSegmentId,
+  };
+}
+
+// TP-197 (#464): Render a horizontal pill row of per-segment status badges for a
+// multi-segment task. Each pill shows an icon + repoId for one segment. The icon
+// reflects the segment's status (succeeded / running / pending / failed / stalled /
+// skipped). The current segment (the one actively executing on its lane) gets an
+// emphasis class. Returns "" for single-segment tasks so the rendered DOM is
+// byte-identical to today for the non-segmented common case (no regression).
+//
+// Consumes:
+//   - task.segmentIds: string[] (ordered, from PersistedTaskRecord)
+//   - segmentStatusMap: Map<segmentId, PersistedSegmentStatus> built by
+//     buildSegmentStatusMap() from batch.segments[]
+//   - activeSegmentId: string|null — current executing segment (from V2 lane
+//     snapshot's segmentId, or the task's activeSegmentId field)
+function taskSegmentPillRow(task, segmentStatusMap, activeSegmentId) {
+  const segmentIds = Array.isArray(task?.segmentIds)
+    ? task.segmentIds.filter(id => typeof id === "string")
+    : [];
+  if (segmentIds.length <= 1) return "";
+
+  // Status -> { icon, className } table. Keep emoji simple/monospace-friendly.
+  // ✅ succeeded, ⏳ running, ⬚ pending, ❌ failed, ⏸ stalled, ↷ skipped.
+  const styles = {
+    succeeded: { icon: "\u2705", cls: "seg-succeeded" },
+    running:   { icon: "\u23F3", cls: "seg-running" },
+    pending:   { icon: "\u2B1A", cls: "seg-pending" },
+    failed:    { icon: "\u274C", cls: "seg-failed" },
+    stalled:   { icon: "\u23F8", cls: "seg-stalled" },
+    skipped:   { icon: "\u21B7", cls: "seg-skipped" },
+  };
+
+  const pills = segmentIds.map((segId) => {
+    const status = segmentStatusMap.get(segId) || "pending";
+    const style = styles[status] || styles.pending;
+    const parsed = parseSegmentId(segId);
+    const repoLabel = parsed?.repoId || segId;
+    const isCurrent = activeSegmentId && segId === activeSegmentId;
+    const currentCls = isCurrent ? " seg-pill-current" : "";
+    const title = `${segId} \u00b7 ${status}`;
+    return `<span class="seg-pill ${style.cls}${currentCls}" title="${escapeHtml(title)}">`
+      + `<span class="seg-pill-icon">${style.icon}</span>`
+      + `<span class="seg-pill-label">${escapeHtml(repoLabel)}</span>`
+      + `</span>`;
+  }).join("");
+
+  return `<div class="task-segment-row">${pills}</div>`;
+}
+
+function laneActiveSegmentInfo(v2snap, laneTasks, segmentStatusMap) {
+  if (!v2snap || !v2snap.segmentId) return null;
+  const parsed = parseSegmentId(v2snap.segmentId);
+  if (!parsed) return null;
+
+  const ownerTaskId = v2snap.taskId || parsed.taskId;
+  const ownerTask = (laneTasks || []).find(t => t.taskId === ownerTaskId) || null;
+  if (ownerTask) {
+    const byTask = taskSegmentProgress(ownerTask, segmentStatusMap, v2snap.segmentId);
+    if (byTask) return byTask;
+    return null;
+  }
+
+  return {
+    index: null,
+    total: null,
+    repoId: parsed.repoId,
+    segmentId: v2snap.segmentId,
+  };
+}
+
+// Repo filter change handler
+$repoFilter.addEventListener("change", (e) => {
+  selectedRepo = e.target.value;
+  // Re-render with current data
+  if (currentData) {
+    const batch = currentData.batch;
+    const sessions = currentData.sessions ?? currentData.tmuxSessions ?? [];
+    if (batch) {
+      renderLanesTasks(batch, sessions);
+      renderMergeAgents(batch, sessions);
+    }
+  }
+});
+
+// ─── Render: Header ─────────────────────────────────────────────────────────
+
+function renderHeader(batch) {
+  if (!batch) {
+    $batchId.textContent = "—";
+    $batchPhase.textContent = "No batch";
+    $batchPhase.className = "header-badge badge-phase";
+    return;
+  }
+  $batchId.textContent = batch.batchId;
+  $batchPhase.textContent = batch.phase;
+  $batchPhase.className = `header-badge badge-phase phase-${batch.phase}`;
+}
+
+// ─── Render: Summary ────────────────────────────────────────────────────────
+
+function renderSummary(batch) {
+  if (!batch) {
+    $progressBarBg.innerHTML = "";
+    $overallPct.textContent = "0%";
+    $summaryCounts.innerHTML = "";
+    $summaryElapsed.textContent = "—";
+    $summaryWaves.innerHTML = "";
+    return;
+  }
+
+  const tasks = batch.tasks || [];
+  const total = tasks.length;
+  const succeeded = tasks.filter(t => t.status === "succeeded").length;
+  const running   = tasks.filter(t => t.status === "running").length;
+  const failed    = tasks.filter(t => t.status === "failed").length;
+  const stalled   = tasks.filter(t => t.status === "stalled").length;
+  const pending   = tasks.filter(t => t.status === "pending").length;
+
+  // ── Checkbox-based progress by wave ──────────────────────────
+  const taskMap = new Map(tasks.map(t => [t.taskId, t]));
+  const wavePlan = batch.wavePlan || [tasks.map(t => t.taskId)]; // fallback: single wave
+  const currentWaveIdx = batch.currentWaveIndex || 0;
+
+  // TP-148: Build wave segment context — for each task appearing in multiple waves,
+  // determine which segment corresponds to each wave appearance.
+  const taskWaveAppearance = new Map(); // taskId → count of appearances so far
+  const waveSegmentLabels = wavePlan.map((taskIds) => {
+    const labels = new Map(); // taskId → label string
+    for (const tid of taskIds) {
+      const task = taskMap.get(tid);
+      const segmentIds = task?.segmentIds;
+      if (!segmentIds || segmentIds.length <= 1) continue;
+      const count = (taskWaveAppearance.get(tid) || 0);
+      taskWaveAppearance.set(tid, count + 1);
+      const segId = segmentIds[count];
+      if (segId) {
+        const parsed = parseSegmentId(segId);
+        const repo = parsed ? parsed.repoId : "";
+        labels.set(tid, `${tid} (segment ${count + 1}/${segmentIds.length}: ${repo})`);
+      }
+    }
+    return labels;
+  });
+
+  // Compute per-wave and overall checkbox totals
+  let batchChecked = 0, batchTotal = 0;
+  const waveStats = wavePlan.map((taskIds, waveIdx) => {
+    let wChecked = 0, wTotal = 0;
+    let allSucceeded = taskIds.length > 0;
+    for (const tid of taskIds) {
+      const t = taskMap.get(tid);
+      if (!t || t.status !== "succeeded") allSucceeded = false;
+      if (t && t.status === "succeeded" && t.statusData) {
+        // Succeeded task with statusData: count as fully done even if
+        // STATUS.md checkboxes weren't all ticked before .DONE was created
+        const total = t.statusData.total || 1;
+        wChecked += total;
+        wTotal += total;
+      } else if (t && t.statusData) {
+        wChecked += t.statusData.checked || 0;
+        wTotal += t.statusData.total || 0;
+      } else if (t && t.status === "succeeded") {
+        // Succeeded tasks may not have statusData if STATUS.md was cleaned up
+        // Count as fully done — use a small placeholder if no data
+        wChecked += 1;
+        wTotal += 1;
+      }
+    }
+    batchChecked += wChecked;
+    batchTotal += wTotal;
+    return { waveIdx, taskIds, checked: wChecked, total: wTotal, allSucceeded };
+  });
+
+  const overallPct = batchTotal > 0 ? Math.round((batchChecked / batchTotal) * 100) : 0;
+  $overallPct.textContent = `${overallPct}%`;
+
+  // Build segmented progress bar — each wave gets a proportional segment
+  let barHtml = "";
+  for (const ws of waveStats) {
+    const segWidthPct = batchTotal > 0 ? (ws.total / batchTotal) * 100 : (100 / waveStats.length);
+    const fillPct = ws.total > 0 ? (ws.checked / ws.total) * 100 : 0;
+    const checkboxDone = ws.checked === ws.total && ws.total > 0;
+    const pastWave = ws.waveIdx < currentWaveIdx;
+    const batchDone = batch.phase === "completed";
+    // TP-178: During merging, only past waves are truly done. The current wave's
+    // checkboxDone/allSucceeded can be true (tasks finished) but the wave itself
+    // isn't done until the merge completes. (#493)
+    const isMerging = batch.phase === "merging";
+    const isDone = batchDone || pastWave || (!isMerging && (checkboxDone || ws.allSucceeded));
+    const isMergingWave = isMerging && ws.waveIdx === currentWaveIdx;
+    const isCurrent = ws.waveIdx === currentWaveIdx && (batch.phase === "executing" || isMerging);
+    const isFuture = ws.waveIdx > currentWaveIdx && (batch.phase === "executing" || isMerging);
+
+    const fillClass = isDone ? "pct-hi" : fillPct > 50 ? "pct-mid" : fillPct > 0 ? "pct-low" : "pct-0";
+    const fillWidth = isDone ? 100 : fillPct;
+    // TP-178: Add merging visual state for the wave currently being merged (#493)
+    const segClass = isMergingWave ? "wave-seg-current wave-seg-merging" : isCurrent ? "wave-seg-current" : isFuture ? "wave-seg-future" : "";
+
+    // TP-148: Use segment-aware labels in tooltip when available
+    const segLabels = waveSegmentLabels[ws.waveIdx] || new Map();
+    const tooltipTasks = ws.taskIds.map(tid => segLabels.get(tid) || tid).join(', ');
+    barHtml += `<div class="wave-seg ${segClass}" style="width:${segWidthPct.toFixed(1)}%" title="W${ws.waveIdx + 1}: ${ws.checked}/${ws.total} checkboxes (${tooltipTasks})">`;
+    barHtml += `  <div class="wave-seg-fill ${fillClass}" style="width:${fillWidth.toFixed(1)}%"></div>`;
+    barHtml += `  <span class="wave-seg-label">W${ws.waveIdx + 1}</span>`;
+    barHtml += `</div>`;
+  }
+  $progressBarBg.innerHTML = barHtml;
+
+  let countsHtml = "";
+  if (succeeded > 0) countsHtml += `<span class="count-chip count-succeeded"><span class="count-num">${succeeded}</span><span class="count-icon">✓</span></span>`;
+  if (running > 0)   countsHtml += `<span class="count-chip count-running"><span class="count-num">${running}</span><span class="count-icon">▶</span></span>`;
+  if (failed > 0)    countsHtml += `<span class="count-chip count-failed"><span class="count-num">${failed}</span><span class="count-icon">✗</span></span>`;
+  if (stalled > 0)   countsHtml += `<span class="count-chip count-stalled"><span class="count-num">${stalled}</span><span class="count-icon">⏸</span></span>`;
+  if (pending > 0)   countsHtml += `<span class="count-chip count-pending"><span class="count-num">${pending}</span><span class="count-icon">◌</span></span>`;
+  countsHtml += `<span class="count-total">/ ${total}</span>`;
+  $summaryCounts.innerHTML = countsHtml;
+
+  const elapsed = batch.startedAt ? Date.now() - batch.startedAt : 0;
+  let elapsedStr = `elapsed: ${formatDuration(elapsed)}`;
+  if (batch.updatedAt) elapsedStr += `  ·  updated: ${relativeTime(batch.updatedAt)}`;
+
+  // Aggregate tokens/cost for summary.
+  // Runtime V2 snapshots are authoritative when present; legacy lane-state sidecars are fallback.
+  const laneStates = currentData?.laneStates || {};
+  const runtimeLaneSnapshots = currentData?.runtimeLaneSnapshots || {};
+  const v2Snaps = Object.values(runtimeLaneSnapshots);
+
+  let batchInput = 0, batchOutput = 0, batchCacheRead = 0, batchCacheWrite = 0, batchCostFromSnapshots = 0;
+
+  if (v2Snaps.length > 0) {
+    for (const snap of v2Snaps) {
+      const w = snap?.worker || {};
+      batchInput += w.inputTokens || 0;
+      batchOutput += w.outputTokens || 0;
+      batchCacheRead += w.cacheReadTokens || 0;
+      batchCacheWrite += w.cacheWriteTokens || 0;
+      batchCostFromSnapshots += w.costUsd || 0;
+
+      const r = snap?.reviewer || null;
+      if (r) {
+        batchInput += r.inputTokens || 0;
+        batchOutput += r.outputTokens || 0;
+        batchCacheRead += r.cacheReadTokens || 0;
+        batchCacheWrite += r.cacheWriteTokens || 0;
+        batchCostFromSnapshots += r.costUsd || 0;
+      }
+    }
+  } else {
+    // Legacy fallback
+    for (const ls of Object.values(laneStates)) {
+      batchInput += ls.workerInputTokens || 0;
+      batchOutput += ls.workerOutputTokens || 0;
+      batchCacheRead += ls.workerCacheReadTokens || 0;
+      batchCacheWrite += ls.workerCacheWriteTokens || 0;
+      batchCostFromSnapshots += ls.workerCostUsd || 0;
+    }
+  }
+
+  // Keep server-computed cost as fallback for uncovered early-start lanes.
+  const batchCost = batchCostFromSnapshots > 0
+    ? batchCostFromSnapshots
+    : ((currentData?.batchTotalCost != null && currentData.batchTotalCost > 0)
+      ? currentData.batchTotalCost
+      : 0);
+  const batchTotalIn = batchInput + batchCacheRead;
+  if (batchTotalIn > 0 || batchOutput > 0) {
+    let tokenStr = `  ·  tokens: ↑${formatTokens(batchTotalIn)} ↓${formatTokens(batchOutput)}`;
+    if (batchCost > 0) tokenStr += `  ·  cost: ${formatCost(batchCost)}`;
+    elapsedStr += tokenStr;
+  }
+
+  $summaryElapsed.textContent = elapsedStr;
+
+  // Waves
+  if (batch.wavePlan && batch.wavePlan.length > 0) {
+    const waveIdx = batch.currentWaveIndex || 0;
+    let wavesHtml = '<span style="color:var(--text-muted); font-weight:600; margin-right:4px;">Waves</span>';
+    batch.wavePlan.forEach((taskIds, i) => {
+      // TP-178: During merging, only past waves are done; current wave shows merging state (#493)
+      const isDone = i < waveIdx || batch.phase === "completed";
+      const isCurrent = i === waveIdx && (batch.phase === "executing" || batch.phase === "merging");
+      const isMergingChip = i === waveIdx && batch.phase === "merging";
+      const cls = isDone ? "done" : isMergingChip ? "current merging" : isCurrent ? "current" : "";
+      // #484: Show lane parallelization within each wave. Group taskIds by
+      // their assigned lane: tasks on the same lane render with `→` (serial),
+      // tasks on different lanes render with ` | ` (parallel). Tooltip shows
+      // the expanded lane breakdown.
+      // TP-197 post-merge fold: pass `batch.tasks` as the task→lane source.
+      // The previous arg `batch.lanes` only carries live Runtime V2 lane
+      // state for the *currently active* wave — past/future wave chips
+      // would fall back to comma-separated. `batch.tasks[].laneNumber` is
+      // persisted for the entire batch lifecycle, so all waves render with
+      // the correct parallelization separator regardless of active state.
+      const { compact, tooltip } = formatWaveLaneBreakdown(taskIds, batch.lanes || [], batch.tasks || [], i + 1);
+      const titleAttr = tooltip ? ` title="${escapeHtml(tooltip)}"` : "";
+      wavesHtml += `<span class="wave-chip ${cls}"${titleAttr}>W${i + 1} [${compact}]</span>`;
+    });
+    $summaryWaves.innerHTML = wavesHtml;
+  } else {
+    $summaryWaves.innerHTML = "";
+  }
+}
+
+/**
+ * Compute lane parallelization for a wave's tasks (#484).
+ *
+ * Returns:
+ *   - `compact`: a string like "TP-165 → TP-166 | TP-168 | TP-167" suitable
+ *     for the wave-chip body. Tasks on the same lane are joined by ` → `
+ *     (in lane execution order, not just appearance order); separate lanes
+ *     are joined by ` | `.
+ *   - `tooltip`: a multi-line string like
+ *     "W1\n  L1: TP-165 → TP-166\n  L2: TP-168\n  L3: TP-167" suitable for
+ *     the chip's `title` attribute. Empty string when no lane data is
+ *     available (future waves not yet provisioned).
+ *
+ * When lane data is missing for one or more tasks (e.g., the wave has not
+ * yet been provisioned, or task hasn't been assigned), unassigned tasks
+ * are shown with the previous flat formatting and no tooltip is generated
+ * — this preserves backward compatibility with future-wave display.
+ */
+function formatWaveLaneBreakdown(taskIds, lanes, tasks, waveNumber) {
+  if (!Array.isArray(taskIds) || taskIds.length === 0) {
+    return { compact: "", tooltip: "" };
+  }
+  // Build taskId → laneNumber map. Prefer the persisted-per-task
+  // `tasks[i].laneNumber` (covers all waves, lifecycle-stable). Fall back
+  // to live `lanes[]` only when tasks data is missing or doesn't carry
+  // laneNumber for a given task.
+  //
+  // TP-197 post-merge fold: the previous implementation read ONLY from
+  // `lanes`, which is Runtime V2 live state and only populated for the
+  // currently active wave. That caused inactive waves' chips to fall back
+  // to comma-separated display (no parallelization indicator), giving the
+  // impression that the separator changed as the batch progressed. Using
+  // the persisted `tasks[].laneNumber` makes the indicator stable across
+  // all waves regardless of active state.
+  const taskToLane = new Map();
+  if (Array.isArray(tasks)) {
+    for (const t of tasks) {
+      // Persistence assigns `laneNumber: 0` as a sentinel meaning
+      // "unallocated" (see persistence.ts:1378 — `lane?.laneNumber ??
+      // outcome?.laneNumber ?? 0`). Real lane numbers start at 1. We must
+      // skip 0 here so future-wave tasks (which all have the 0 sentinel
+      // until their wave starts) don't get falsely grouped under a fake
+      // "lane 0" and rendered as serial.
+      if (
+        t &&
+        t.taskId &&
+        typeof t.laneNumber === "number" &&
+        t.laneNumber >= 1 &&
+        !taskToLane.has(t.taskId)
+      ) {
+        taskToLane.set(t.taskId, t.laneNumber);
+      }
+    }
+  }
+  // Fallback: anything `tasks` didn't cover, try `lanes` (live state).
+  for (const lane of lanes) {
+    if (!lane || !Array.isArray(lane.taskIds)) continue;
+    for (const tid of lane.taskIds) {
+      if (!taskToLane.has(tid)) taskToLane.set(tid, lane.laneNumber);
+    }
+  }
+  // If no task in this wave has lane data, fall back to flat display.
+  const hasAnyLaneData = taskIds.some((t) => taskToLane.has(t));
+  if (!hasAnyLaneData) {
+    return { compact: taskIds.join(", "), tooltip: "" };
+  }
+  // Group taskIds by lane. Preserve appearance order across lanes.
+  // Within a lane, preserve the lane's own taskIds order so `→` reflects
+  // execution order, not the order taskIds happens to appear here.
+  const laneOrder = []; // lane numbers in order they first appear in taskIds
+  const laneToTasks = new Map(); // laneNumber → ordered taskIds for this wave
+  const unassigned = []; // taskIds not in any lane (shouldn't happen but be defensive)
+  for (const tid of taskIds) {
+    const ln = taskToLane.get(tid);
+    if (ln === undefined) {
+      unassigned.push(tid);
+      continue;
+    }
+    if (!laneToTasks.has(ln)) {
+      laneToTasks.set(ln, []);
+      laneOrder.push(ln);
+    }
+    laneToTasks.get(ln).push(tid);
+  }
+  // Sort each lane's tasks by their position in the lane.taskIds array
+  // so `→` always reflects execution order on that lane.
+  for (const ln of laneOrder) {
+    const lane = lanes.find((l) => l && l.laneNumber === ln);
+    if (lane && Array.isArray(lane.taskIds)) {
+      const orderIndex = new Map(lane.taskIds.map((t, idx) => [t, idx]));
+      laneToTasks.get(ln).sort((a, b) => (orderIndex.get(a) ?? 0) - (orderIndex.get(b) ?? 0));
+    }
+  }
+  // Build compact representation.
+  const laneSegments = laneOrder.map((ln) => laneToTasks.get(ln).join(" → "));
+  if (unassigned.length > 0) laneSegments.push(unassigned.join(", "));
+  const compact = laneSegments.join(" | ");
+  // Build tooltip representation.
+  const tooltipLines = [`W${waveNumber}`];
+  for (const ln of laneOrder) {
+    tooltipLines.push(`  L${ln}: ${laneToTasks.get(ln).join(" → ")}`);
+  }
+  if (unassigned.length > 0) {
+    tooltipLines.push(`  (unassigned): ${unassigned.join(", ")}`);
+  }
+  return { compact, tooltip: tooltipLines.join("\n") };
+}
+
+// ─── Render: Lanes + Tasks (integrated) ─────────────────────────────────────
+
+function renderLanesTasks(batch, sessions) {
+  if (!batch || !batch.lanes || batch.lanes.length === 0) {
+    $lanesTasksBody.innerHTML = '<div class="empty-state">No lanes</div>';
+    return;
+  }
+
+  const tasks = batch.tasks || [];
+  const sessionSet = new Set(sessions || []);
+  const laneStates = currentData?.laneStates || {};
+  const telemetry = currentData?.telemetry || {};
+  // TP-107: V2 lane snapshots take precedence over legacy lane states when present
+  const v2Snapshots = currentData?.runtimeLaneSnapshots || {};
+  const showRepos = knownRepos.length >= 2;
+  const segmentStatusMap = buildSegmentStatusMap(batch);
+  let html = "";
+
+  for (const lane of batch.lanes) {
+    const laneTasks = (lane.taskIds || []).map(tid => tasks.find(t => t.taskId === tid)).filter(Boolean);
+    const v2snap = v2Snapshots[lane.laneNumber] || null;
+    const laneActiveSegment = laneActiveSegmentInfo(v2snap, laneTasks, segmentStatusMap);
+
+    // Repo filtering: if a repo is selected, skip lanes that don't match
+    if (selectedRepo && showRepos) {
+      const laneMatchesRepo = (lane.repoId === selectedRepo) ||
+        laneTasks.some(t => (taskRepoId(t) || lane.repoId) === selectedRepo);
+      if (!laneMatchesRepo) continue;
+    }
+
+    // TP-107: check Runtime V2 registry for liveness first, fall back to session list
+    const laneSessionId = lane.laneSessionId;
+    const v2Alive = isLaneAliveV2(lane.laneNumber);
+    const alive = v2Alive !== null ? v2Alive : sessionSet.has(laneSessionId);
+
+
+    // Lane header
+    html += `<div class="lane-group">`;
+    html += `<div class="lane-header">`;
+    html += `  <span class="lane-num">${lane.laneNumber}</span>`;
+    html += `  <div class="lane-meta">`;
+    html += `    <span class="lane-session">${escapeHtml(laneSessionId || "—")}</span>`;
+    html += `    <span class="lane-branch">${escapeHtml(lane.branch || "—")}</span>`;
+    if (showRepos && lane.repoId) {
+      html += `    ${repoBadgeHtml(lane.repoId, "repo-badge-lane")}`;
+    }
+    if (laneActiveSegment) {
+      html += `    <span class="lane-segment" title="${escapeHtml(laneActiveSegment.segmentId || segmentProgressText(laneActiveSegment))}">${escapeHtml(segmentProgressText(laneActiveSegment))}</span>`;
+    }
+    html += `  </div>`;
+    html += `  <div class="lane-right">`;
+    html += `    <span class="session-dot ${alive ? "alive" : "dead"}" title="${alive ? "session alive" : "session not active"}"></span>`;
+    // View button: shows conversation stream when available
+    const isViewingConv = viewerMode === 'conversation' && viewerTarget === laneSessionId;
+    html += `    <button class="session-view-btn${isViewingConv ? ' active' : ''}" onclick="viewConversation('${escapeHtml(laneSessionId)}')" title="View worker conversation">👁 View</button>`;
+
+    html += `  </div>`;
+    html += `</div>`;
+
+    // Task rows for this lane
+    if (laneTasks.length === 0) {
+      html += `<div class="task-row"><span class="task-icon"></span><span style="color:var(--text-faint);grid-column:2/-1;">No tasks assigned</span></div>`;
+    }
+
+    // Get lane state and telemetry for worker stats
+    // TP-107: V2 lane snapshots take precedence when present
+    const legacyLs = laneStates[laneSessionId] || null;
+    const ls = v2snap ? mergeV2LaneSnapshot(legacyLs, v2snap) : legacyLs;
+    const tel = telemetry[laneSessionId] || null;
+
+    for (const task of laneTasks) {
+      // Repo filtering at task level
+      const tRepo = taskRepoId(task) || lane.repoId;
+      if (selectedRepo && showRepos && tRepo !== selectedRepo) continue;
+
+      const sd = task.statusData;
+      const dur = task.startedAt
+        ? formatDuration((task.endedAt || Date.now()) - task.startedAt)
+        : "—";
+      const segmentInfo = taskSegmentProgress(task, segmentStatusMap, null);
+      const packetHomeRepo = typeof task.packetRepoId === "string" ? task.packetRepoId : "";
+      const showPacketHome = !!packetHomeRepo && packetHomeRepo !== (tRepo || lane.repoId || "");
+
+      // Progress cell
+      // TP-174: Prefer V2 snapshot progress (segment-scoped when available)
+      // over full STATUS.md counts when the task is actively running on this lane.
+      // TP-176: Succeeded tasks always show 100% regardless of sidecar/statusData (#491).
+      let progressHtml = "";
+      const v2p = ls && ls._v2Progress;
+      const taskMatch = v2p && ls.taskId === task.taskId;
+      // Split V2 usage: progress needs totals > 0, but step/iter can be used whenever present
+      const useV2Progress = taskMatch && v2p.total > 0;
+      const useV2Step = taskMatch && !!v2p.currentStep;
+      if (task.status === "succeeded") {
+        // #491 fix: succeeded tasks always show 100%
+        progressHtml = `
+          <div class="task-progress">
+            <div class="task-progress-bar"><div class="task-progress-fill pct-hi" style="width:100%"></div></div>
+            <span class="task-progress-text">100%</span>
+          </div>`;
+      } else if (useV2Progress || (sd && sd.total > 0)) {
+        const displayChecked = useV2Progress ? v2p.checked : sd.checked;
+        const displayTotal = useV2Progress ? v2p.total : sd.total;
+        const displayProgress = displayTotal > 0 ? Math.round((displayChecked / displayTotal) * 100) : 0;
+        const fillClass = pctClass(displayProgress);
+        progressHtml = `
+          <div class="task-progress">
+            <div class="task-progress-bar">
+              <div class="task-progress-fill ${fillClass}" style="width:${displayProgress}%"></div>
+            </div>
+            <span class="task-progress-text">${displayProgress}% ${displayChecked}/${displayTotal}</span>
+          </div>`;
+      } else if (task.status === "running") {
+        // #494 fix: running tasks without meaningful totals show executing indicator
+        // This covers non-final segments, early execution before sidecar captures, and stale 0/0 data
+        progressHtml = `
+          <div class="task-progress">
+            <div class="task-progress-bar"><div class="task-progress-fill pct-low task-progress-executing" style="width:100%"></div></div>
+            <span class="task-progress-text">executing…</span>
+          </div>`;
+      } else if (task.status === "pending") {
+        progressHtml = `
+          <div class="task-progress">
+            <div class="task-progress-bar"><div class="task-progress-fill pct-0" style="width:0%"></div></div>
+            <span class="task-progress-text">0%</span>
+          </div>`;
+      } else {
+        progressHtml = '<span style="color:var(--text-faint)">—</span>';
+      }
+
+      // Step cell
+      // TP-178: Prefer V2 snapshot currentStep (refreshed every sidecar poll) over
+      // server-parsed statusData which can lag behind (#488).
+      let stepHtml = "";
+      if (task.status === "succeeded") {
+        // TP-178: Succeeded tasks always show "Complete" regardless of sidecar data (#491)
+        stepHtml = '<span style="color:var(--green)">Complete</span>';
+      } else if (sd || useV2Step) {
+        // #488 fix: prefer V2 step name whenever present (even if totals are 0)
+        const stepName = useV2Step ? v2p.currentStep : (sd ? sd.currentStep : "Unknown");
+        const iter = (useV2Step && v2p.iteration != null) ? v2p.iteration : (sd ? sd.iteration : 0);
+        const revs = (useV2Step && v2p.reviews != null) ? v2p.reviews : (sd ? sd.reviews : 0);
+        stepHtml = escapeHtml(stepName);
+        if (iter > 0) stepHtml += `<span class="task-iter">i${iter}</span>`;
+        if (revs > 0) stepHtml += `<span class="task-iter">r${revs}</span>`;
+      } else if (task.status === "pending") {
+        stepHtml = '<span style="color:var(--text-faint)">Waiting</span>';
+      } else {
+        stepHtml = `<span style="color:var(--text-faint)">${escapeHtml(task.exitReason || "—")}</span>`;
+      }
+
+      // TP-197 (#464): Compute the per-segment pill row for multi-segment tasks.
+      // Returns "" for single-segment tasks (no DOM regression for the common case).
+      // For multi-segment tasks we render the pill row in the task-row's grid row 3
+      // (via .task-segment-row CSS) and suppress the inline "Segment N/T: repo" text
+      // in detailBits to avoid duplicating signal — the pill row already shows the
+      // current segment (via seg-pill-current) and total count (via pill count).
+      const segmentPillRowHtml = taskSegmentPillRow(
+        task,
+        segmentStatusMap,
+        v2snap && v2snap.taskId === task.taskId ? v2snap.segmentId : (segmentInfo?.segmentId || null),
+      );
+      const hasSegmentPillRow = segmentPillRowHtml !== "";
+
+      const detailBits = [];
+      if (segmentInfo && !hasSegmentPillRow) {
+        // Single-segment + non-segmented tasks: existing inline text (unchanged).
+        // Multi-segment tasks: suppressed because the new pill row carries the same
+        // information more legibly.
+        detailBits.push(`<span class="task-segment-progress" title="${escapeHtml(segmentInfo.segmentId || segmentProgressText(segmentInfo))}">${escapeHtml(segmentProgressText(segmentInfo))}</span>`);
+      }
+      if (showPacketHome) {
+        detailBits.push(`<span class="task-packet-home" title="Task packet home repo">packet: ${escapeHtml(packetHomeRepo)}</span>`);
+      }
+      if (detailBits.length > 0) {
+        stepHtml = `${detailBits.join('<span class="task-detail-sep"> · </span>')}<span class="task-detail-sep"> · </span><span class="task-step-main">${stepHtml}</span>`;
+      }
+
+      // Worker stats from lane state sidecar + telemetry badges
+      let workerHtml = "";
+      // Reviewer sub-row should only appear under the active running task in this lane.
+      // Runtime V2 snapshots provide taskId; during early startup it can be briefly unset,
+      // so allow a task-status fallback while still avoiding duplicate rows.
+      const reviewerActive = isReviewerActiveForTask(ls, task);
+      const telemBadges = task.status !== "pending" ? telemetryBadgesHtml(tel, reviewerActive) : "";
+      if (ls && ls.workerStatus === "running" && task.status === "running") {
+        const elapsed = ls.workerElapsed ? `${Math.round(ls.workerElapsed / 1000)}s` : "";
+        const tools = ls.workerToolCount || 0;
+        const ctx = ls.workerContextPct ? `${Math.round(ls.workerContextPct)}%` : "";
+        const lastTool = reviewerActive ? "[awaiting review]" : (ls.workerLastTool || "");
+        const tokenStr = tokenSummaryFromLaneState(ls);
+        workerHtml = `<div class="worker-stats">`;
+        workerHtml += `<span class="worker-stat" title="Worker elapsed">⏱ ${elapsed}</span>`;
+        workerHtml += `<span class="worker-stat" title="Tool calls">🔧 ${tools}</span>`;
+        if (ctx) workerHtml += `<span class="worker-stat" title="Context window used">📊 ${ctx}</span>`;
+        if (tokenStr) workerHtml += `<span class="worker-stat" title="Tokens: input↑ output↓ cacheRead(R) cacheWrite(W)">🪙 ${tokenStr}</span>`;
+        if (lastTool) workerHtml += `<span class="worker-stat worker-last-tool" title="${reviewerActive ? 'Waiting for reviewer' : 'Last tool call'}">${reviewerActive ? '<span style="color:var(--yellow)">' + escapeHtml(lastTool) + '</span>' : escapeHtml(lastTool)}</span>`;
+        workerHtml += telemBadges;
+        workerHtml += `</div>`;
+      } else if (!ls && tel && task.status === "running") {
+        // Running task with telemetry but no lane-state yet (early startup)
+        const lastTool = tel.lastTool || "";
+        workerHtml = `<div class="worker-stats">`;
+        if (lastTool) workerHtml += `<span class="worker-stat worker-last-tool" title="Last tool call">${escapeHtml(lastTool)}</span>`;
+        workerHtml += telemBadges;
+        workerHtml += `</div>`;
+      } else if (ls && ls.workerStatus === "done" && task.status !== "pending") {
+        workerHtml = `<div class="worker-stats"><span class="worker-stat" style="color:var(--green)">✓ Worker done</span>${telemBadges}</div>`;
+      } else if (ls && ls.workerStatus === "error" && task.status !== "pending") {
+        workerHtml = `<div class="worker-stats"><span class="worker-stat" style="color:var(--red)">✗ Worker error</span>${telemBadges}</div>`;
+      } else if (telemBadges && task.status !== "pending") {
+        // No lane-state but telemetry exists (done/error lane without sidecar)
+        workerHtml = `<div class="worker-stats">${telemBadges}</div>`;
+      }
+
+      // Reviewer sub-row: shown when reviewer is actively running
+      let reviewerRowHtml = "";
+      if (reviewerActive) {
+        const rElapsed = ls.reviewerElapsed ? `${Math.round(ls.reviewerElapsed / 1000)}s` : "";
+        const rTools = ls.reviewerToolCount || 0;
+        const rCtx = ls.reviewerContextPct ? `${Math.round(ls.reviewerContextPct)}%` : "";
+        const rLastTool = ls.reviewerLastTool || "";
+        const rTokenStr = tokenSummaryFromReviewerLaneState(ls);
+        const rType = ls.reviewerType || "review";
+        const rStep = ls.reviewerStep || "?";
+        reviewerRowHtml = `
+          <div class="task-row reviewer-sub-row">
+            <span class="task-icon"></span>
+            <span class="task-actions"></span>
+            <span class="reviewer-label">📋 Reviewer</span>
+            <span class="reviewer-type">${escapeHtml(rType)} · Step ${rStep}</span>
+            <span class="task-duration"></span>
+            <span></span>
+            <span class="task-step">
+              <div class="worker-stats reviewer-stats">
+                <span class="worker-stat" title="Reviewer elapsed">⏱ ${rElapsed}</span>
+                <span class="worker-stat" title="Reviewer tool calls">🔧 ${rTools}</span>
+                ${rCtx ? `<span class="worker-stat" title="Reviewer context used">📊 ${rCtx}</span>` : ""}
+                ${rTokenStr ? `<span class="worker-stat" title="Reviewer tokens: input↑ output↓ cacheRead(R) cacheWrite(W)">🪙 ${rTokenStr}</span>` : ""}
+                ${rLastTool ? `<span class="worker-stat worker-last-tool" title="Reviewer last tool">${escapeHtml(rLastTool)}</span>` : ""}
+              </div>
+            </span>
+          </div>`;
+      }
+
+      const isViewingStatus = viewerMode === 'status-md' && viewerTarget === task.taskId;
+      const eyeHtml = task.status !== 'pending'
+        ? `<button class="viewer-eye-btn${isViewingStatus ? ' active' : ''}" onclick="viewStatusMd('${escapeHtml(task.taskId)}')" title="View STATUS.md">👁</button>`
+        : '';
+
+      // #485 (revised): Show task title on a second grid row spanning task-id
+      // through progress (cols 3–6), giving ~5× more horizontal space than the
+      // original task-id-only width. Stops before col 7 (task-step + telemetry)
+      // so the step info and worker stats stay visible alongside the title.
+      // Falls back to no subtitle row when taskTitle is missing.
+      const titleHtml = task.taskTitle
+        ? `<div class="task-title-subtitle">${escapeHtml(task.taskTitle)}</div>`
+        : "";
+      // TP-197 (#464): segmentPillRowHtml is empty for single-segment tasks so
+      // the rendered DOM is byte-identical to today for non-segmented tasks.
+      // For multi-segment tasks it renders as grid-row 3 of .task-row.
+      // Sage post-merge fold: the .has-segments class opts the .task-row
+      // grid into a 3-row template only when we actually have a pill row;
+      // otherwise the default 2-row template preserves single-segment task
+      // spacing exactly (an unconditional 3-row template would add an 8px
+      // row-gap even when row 3 is empty, breaking the no-regression contract).
+      const taskRowClass = hasSegmentPillRow ? "task-row has-segments" : "task-row";
+      html += `
+        <div class="${taskRowClass}">
+          <span class="task-icon"><span class="status-dot ${task.status}"></span></span>
+          <span class="task-actions">${eyeHtml}</span>
+          <span class="task-id status-${task.status}">${escapeHtml(task.taskId)}${showRepos ? repoBadgeHtml(tRepo, "repo-badge-task") : ""}</span>
+          <span><span class="status-badge status-${task.status}"><span class="status-dot ${task.status}"></span> ${task.status}</span></span>
+          <span class="task-duration">${dur}</span>
+          <span>${progressHtml}</span>
+          <span class="task-step">${stepHtml}${workerHtml}</span>
+          ${titleHtml}
+          ${segmentPillRowHtml}
+        </div>`;
+      html += reviewerRowHtml;
+    }
+
+    html += `</div>`; // close lane-group
+  }
+
+  $lanesTasksBody.innerHTML = html;
+}
+
+// ─── Render: Merge Agents ───────────────────────────────────────────────────
+
+/** Build full telemetry HTML for a merge agent (parity with worker stats).
+ *  Shows: elapsed, tool count, context %, cost, current tool, retry/compaction badges.
+ *  Returns empty string if no meaningful telemetry exists.
+ */
+function mergeTelemetryHtml(tel, alive) {
+  if (!tel) return '<span class="merge-no-data">—</span>';
+  const hasData = (tel.inputTokens || 0) > 0 || (tel.outputTokens || 0) > 0 ||
+    (tel.toolCalls || 0) > 0 || (tel.cost || 0) > 0;
+  if (!hasData) return '<span class="merge-no-data">—</span>';
+
+  let html = '<div class="merge-stats">';
+
+  // Elapsed time
+  if (tel.startedAt) {
+    const elapsed = Date.now() - tel.startedAt;
+    html += `<span class="worker-stat" title="Merge elapsed">⏱ ${formatDuration(elapsed)}</span>`;
+  }
+
+  // Tool calls
+  if (tel.toolCalls > 0) {
+    html += `<span class="worker-stat" title="Tool calls">🔧 ${tel.toolCalls}</span>`;
+  }
+
+  // Context %
+  if (tel.contextPct > 0) {
+    html += `<span class="worker-stat" title="Context window used">📊 ${Math.round(tel.contextPct)}%</span>`;
+  }
+
+  // Tokens + cost
+  const inp = (tel.inputTokens || 0) + (tel.cacheReadTokens || 0);
+  const out = tel.outputTokens || 0;
+  const cost = tel.cost || 0;
+  if (inp > 0 || out > 0) {
+    let tokenStr = `↑${formatTokens(inp)} ↓${formatTokens(out)}`;
+    if (cost > 0) tokenStr += ` ${formatCost(cost)}`;
+    html += `<span class="worker-stat" title="Tokens">🪙 ${tokenStr}</span>`;
+  }
+
+  // Current tool (if alive/active) or last tool (completed merges)
+  if (alive && tel.currentTool) {
+    html += `<span class="worker-stat worker-last-tool" title="Current tool">${escapeHtml(tel.currentTool)}</span>`;
+  } else if (!alive && tel.lastTool) {
+    html += `<span class="worker-stat worker-last-tool" title="Last tool">${escapeHtml(tel.lastTool)}</span>`;
+  }
+
+  // Retry/compaction badges (reuse shared helper)
+  html += telemetryBadgesHtml(tel);
+
+  html += '</div>';
+  return html;
+}
+
+function renderMergeAgents(batch, sessions) {
+  const mergeResults = batch?.mergeResults || [];
+  const sessionSet = new Set(sessions || []);
+  const showRepos = knownRepos.length >= 2;
+  const telemetry = currentData?.telemetry || {};
+
+  // Check for active merge sessions (convention: {prefix}-{opId}-merge-{N})
+  const mergeSessions = (sessions || []).filter(s => s.includes("-merge-"));
+
+  // Derive merge session name from lane session naming pattern.
+  // Lane sessions: "{prefix}-{opId}-lane-{N}", merge sessions: "{prefix}-{opId}-merge-{N}".
+  // Extract the prefix-opId part from the first lane and use it to construct merge names.
+  const lanes = batch?.lanes || [];
+  let mergePrefix = "orch-merge"; // fallback for legacy/unknown patterns
+  if (lanes.length > 0 && lanes[0].laneSessionId) {
+    const laneName = lanes[0].laneSessionId;
+    const laneMatch = laneName.match(/^(.+)-lane-\d+$/);
+    if (laneMatch) {
+      mergePrefix = laneMatch[1] + "-merge";
+    }
+  }
+  // Helper: get merge session name for a merge number
+  const getMergeSessionName = (mergeNum) => `${mergePrefix}-${mergeNum}`;
+
+  if (mergeResults.length === 0 && mergeSessions.length === 0) {
+    $mergeBody.innerHTML = '<div class="empty-state">No merge agents active</div>';
+    return;
+  }
+
+  let html = '<table class="merge-table"><thead><tr>';
+  // TP-197 post-merge fold: removed 'Session ID' and 'Details' columns.
+  // SESSION ID was hardcoded to '—' in every row — dead weight.
+  // DETAILS only populated for `mr.failureReason` (rare failure cases);
+  // for the common all-merges-succeeded case it's always '—' too.
+  // When a real failure happens, the operator sees status='failed' in
+  // the Status column and can dig into engine logs for the reason —
+  // we'll re-add a focused DETAILS column if/when we have meaningful
+  // structured failure-reason data to surface in the dashboard table.
+  html += '<th>Wave</th><th>Status</th><th>Session</th><th>Telemetry</th>';
+  html += '</tr></thead><tbody>';
+
+  // Track sessions shown in wave result rows so we don't duplicate them below
+  const shownSessions = new Set();
+
+  // Show merge results
+  for (const mr of mergeResults) {
+    // Repo filtering: if a repo is selected and this merge has repoResults,
+    // check if the selected repo is among them
+    const repoResults = mr.repoResults || [];
+    if (selectedRepo && showRepos && repoResults.length >= 1) {
+      const hasSelectedRepo = repoResults.some(rr => rr.repoId === selectedRepo);
+      if (!hasSelectedRepo) continue;
+    }
+
+    const statusCls = mr.status === "succeeded" ? "status-succeeded"
+      : mr.status === "partial" ? "status-stalled"
+      : "status-failed";
+
+    // Merge session mapping: derive from lane numbers involved in this wave.
+    // Merge sessions are named by lane number (e.g., ...-merge-1), not wave index.
+    // Extract lane numbers from repoResults or from batch tasks for this wave.
+    const waveLaneNums = new Set();
+    const repoResults2 = mr.repoResults || [];
+    for (const rr of repoResults2) {
+      for (const ln of (rr.laneNumbers || [])) waveLaneNums.add(ln);
+    }
+    // Fallback: find lane numbers from tasks assigned to this wave
+    if (waveLaneNums.size === 0 && batch.wavePlan && batch.wavePlan[mr.waveIndex]) {
+      const waveTaskIds = new Set(batch.wavePlan[mr.waveIndex]);
+      for (const t of (batch.tasks || [])) {
+        if (waveTaskIds.has(t.taskId) && t.laneNumber != null) {
+          waveLaneNums.add(t.laneNumber);
+        }
+      }
+    }
+    // Find alive merge sessions matching the wave's lane numbers
+    let effectiveSession = null;
+    for (const ln of waveLaneNums) {
+      const candidate = getMergeSessionName(ln);
+      if (sessionSet.has(candidate) && !shownSessions.has(candidate)) {
+        effectiveSession = candidate;
+        break;
+      }
+    }
+    // Fallback: any unshown alive merge session
+    if (!effectiveSession) {
+      effectiveSession = mergeSessions.find(s => sessionSet.has(s) && !shownSessions.has(s)) || null;
+    }
+    const effectiveAlive = !!effectiveSession;
+    if (effectiveSession) shownSessions.add(effectiveSession);
+
+    // TP-178: Find merge telemetry precisely using waveIndex (#498).
+    // First try matching by waveIndex from the telemetry entries (injected from merge snapshots).
+    // Then fall back to session-based matching (lane numbers), but never use a
+    // catch-all fallback that grabs any merge session's telemetry.
+    let mergeTel = null;
+    // Priority 1: Match by waveIndex in telemetry entries
+    for (const [telKey, tel] of Object.entries(telemetry)) {
+      if (tel._source === "merge-snapshot" && tel.waveIndex === mr.waveIndex) {
+        mergeTel = tel;
+        break;
+      }
+    }
+    // Priority 2: Match by lane number session
+    if (!mergeTel) {
+      for (const ln of waveLaneNums) {
+        const candidate = getMergeSessionName(ln);
+        if (telemetry[candidate]) { mergeTel = telemetry[candidate]; break; }
+      }
+    }
+    // Priority 3: Effective session telemetry only (no catch-all fallback)
+    if (!mergeTel && effectiveSession) mergeTel = telemetry[effectiveSession] || null;
+
+    html += `<tr>`;
+    html += `<td class="merge-wave-cell">Wave ${mr.waveIndex + 1}</td>`;
+    html += `<td><span class="status-badge ${statusCls}">${mr.status}</span></td>`;
+    html += `<td class="merge-session-cell">${effectiveAlive ? escapeHtml(effectiveSession) : "—"}</td>`;
+    // Full telemetry cell
+    html += `<td class="merge-telemetry-cell">${mergeTelemetryHtml(mergeTel, effectiveAlive)}</td>`;
+    html += `</tr>`;
+
+    // Per-repo sub-rows: show when workspace mode has repo results
+    if (showRepos && repoResults.length >= 1) {
+      const displayRepos = selectedRepo
+        ? repoResults.filter(rr => rr.repoId === selectedRepo)
+        : repoResults;
+
+      for (const rr of displayRepos) {
+        const rrStatusCls = rr.status === "succeeded" ? "status-succeeded"
+          : rr.status === "partial" ? "status-stalled"
+          : "status-failed";
+        const rrLanes = (rr.laneNumbers || []).map(n => `L${n}`).join(", ") || "—";
+        const rrDetail = rr.failureReason ? escapeHtml(rr.failureReason) : "—";
+
+        html += `<tr class="merge-repo-row">`;
+        html += `<td>${repoBadgeHtml(rr.repoId)}</td>`;
+        html += `<td><span class="status-badge ${rrStatusCls}">${rr.status}</span></td>`;
+        html += `<td class="merge-session-cell">${rrLanes}</td>`;
+        html += `<td></td>`; /* telemetry placeholder */
+        html += `</tr>`;
+      }
+    }
+  }
+
+  // Show active merge sessions not yet in results
+  for (const sess of mergeSessions) {
+    if (shownSessions.has(sess)) continue;
+
+    const sessTel = telemetry[sess] || null;
+    html += `<tr>`;
+    html += `<td class="merge-wave-cell">—</td>`;
+    html += `<td><span class="status-badge status-running"><span class="status-dot running"></span> merging</span></td>`;
+    html += `<td class="merge-session-cell">${escapeHtml(sess)}</td>`;
+    // Full telemetry cell for active merge session
+    html += `<td class="merge-telemetry-cell">${mergeTelemetryHtml(sessTel, true)}</td>`;
+    html += `</tr>`;
+  }
+
+  html += '</tbody></table>';
+  $mergeBody.innerHTML = html;
+}
+
+// ─── Render: Runtime V2 Agents (TP-107) ─────────────────────────────────────
+
+function renderAgentsPanel(registry) {
+  const $panel = document.getElementById('agents-panel');
+  const $body = document.getElementById('agents-body');
+  if (!$panel || !$body) return;
+
+  if (!registry || !registry.agents || Object.keys(registry.agents).length === 0) {
+    $panel.style.display = 'none';
+    return;
+  }
+
+  $panel.style.display = '';
+  const agents = Object.values(registry.agents);
+  let html = '<div class="agents-grid">';
+
+  for (const agent of agents) {
+    const isCrash = ['crashed', 'timed_out'].includes(agent.status);
+    const isTerminal = ['exited', 'crashed', 'timed_out', 'killed'].includes(agent.status);
+    const statusClass = isTerminal ? (isCrash ? 'agent-terminal agent-crashed' : 'agent-terminal') : 'agent-live';
+    const icon = isCrash ? '\u{1F534}' : (isTerminal ? '\u26AA' : '\u{1F7E2}');
+    // Display label: exited and killed both show as 'shutdown' — the mechanism is an
+    // implementation detail. Only crashed/timed_out warrant a different label.
+    const displayStatus = (agent.status === 'exited' || agent.status === 'killed') ? 'shutdown'
+      : agent.status === 'timed_out' ? 'timed out'
+      : agent.status;
+    const elapsed = agent.startedAt ? Math.round((Date.now() - agent.startedAt) / 1000) : 0;
+    const elapsedStr = elapsed > 0 ? formatDuration(elapsed * 1000) : '';
+
+    html += `<div class="agent-card ${statusClass}">`;
+    html += `<div class="agent-header">${icon} <strong>${escapeHtml(agent.agentId)}</strong></div>`;
+    html += `<div class="agent-meta">`;
+    html += `<span class="agent-badge">${escapeHtml(agent.role)}</span>`;
+    if (agent.laneNumber != null) html += `<span class="agent-badge">lane ${agent.laneNumber}</span>`;
+    if (agent.taskId) html += `<span class="agent-badge">${escapeHtml(agent.taskId)}</span>`;
+    html += `<span class="agent-badge agent-status-${agent.status}">${escapeHtml(displayStatus)}</span>`;
+    if (elapsedStr && !isTerminal) html += `<span class="agent-badge">${elapsedStr}</span>`;
+    html += `</div>`;
+    html += `</div>`;
+  }
+
+  html += '</div>';
+  $body.innerHTML = html;
+}
+
+// ─── Render: Mailbox Messages (TP-107) ──────────────────────────────────────
+
+function renderMessagesPanel(mailbox) {
+  const $panel = document.getElementById('messages-panel');
+  const $body = document.getElementById('messages-body');
+  if (!$panel || !$body) return;
+
+  // TP-093: event-authoritative model — prefer audit events, fallback to directory scan
+  const auditEvents = mailbox?.auditEvents || [];
+  const dirMessages = mailbox?.messages || [];
+  const hasData = auditEvents.length > 0 || dirMessages.length > 0;
+
+  if (!mailbox || !hasData) {
+    $panel.style.display = 'none';
+    return;
+  }
+
+  $panel.style.display = '';
+  let html = '<div class="messages-list">';
+
+  if (auditEvents.length > 0) {
+    // Primary: render from audit event stream (authoritative, durable)
+    for (const evt of auditEvents) {
+      html += renderMailboxAuditEvent(evt);
+    }
+  } else {
+    // Fallback: render from directory scan (legacy compatibility)
+    for (const msg of dirMessages) {
+      html += renderMailboxDirMessage(msg);
+    }
+  }
+
+  html += '</div>';
+  $body.innerHTML = html;
+}
+
+/** Render a single mailbox audit event (events.jsonl row). */
+function renderMailboxAuditEvent(evt) {
+  const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
+  const type = evt.type || '';
+
+  let direction = '';
+  let statusBadge = '';
+  let typeBadge = '';
+  let preview = '';
+
+  if (type === 'message_sent') {
+    const isBroadcast = evt.broadcast;
+    direction = isBroadcast ? '\u2192 all (broadcast)' : `\u2192 ${escapeHtml(evt.to || '')}`;
+    statusBadge = '<span class="msg-badge msg-delivered">sent</span>';
+    typeBadge = `<span class="msg-badge msg-type">${escapeHtml(evt.messageType || '')}</span>`;
+    preview = evt.contentPreview || '';
+  } else if (type === 'message_delivered') {
+    direction = `\u2192 ${escapeHtml(evt.to || '')}`;
+    statusBadge = evt.broadcast
+      ? '<span class="msg-badge msg-delivered">broadcast delivered</span>'
+      : '<span class="msg-badge msg-delivered">delivered</span>';
+    typeBadge = evt.messageType ? `<span class="msg-badge msg-type">${escapeHtml(evt.messageType)}</span>` : '';
+    preview = evt.contentPreview || '';
+  } else if (type === 'message_replied' || type === 'message_escalated') {
+    direction = `\u2190 ${escapeHtml(evt.from || '')}`;
+    statusBadge = type === 'message_escalated'
+      ? '<span class="msg-badge msg-reply">escalation</span>'
+      : '<span class="msg-badge msg-reply">reply</span>';
+    typeBadge = evt.messageType ? `<span class="msg-badge msg-type">${escapeHtml(evt.messageType)}</span>` : '';
+    preview = evt.contentPreview || '';
+  } else if (type === 'message_rate_limited') {
+    direction = `\u2192 ${escapeHtml(evt.to || '')}`;
+    statusBadge = '<span class="msg-badge msg-rate-limited">rate limited</span>';
+    const waitSec = evt.retryAfterMs ? Math.ceil(evt.retryAfterMs / 1000) : '?';
+    preview = `${evt.reason || 'Rate limited'} (retry in ${waitSec}s)`;
+  } else {
+    // Unknown event type — render generically
+    direction = evt.from ? `${escapeHtml(evt.from)}` : '';
+    preview = JSON.stringify(evt);
+  }
+
+  return `<div class="message-row">`
+    + `<span class="msg-time">${escapeHtml(ts)}</span>`
+    + `<span class="msg-direction">${direction}</span>`
+    + typeBadge
+    + statusBadge
+    + `<span class="msg-preview">${escapeHtml(preview)}</span>`
+    + `</div>`;
+}
+
+/** Render a single directory-scanned message (legacy fallback). */
+function renderMailboxDirMessage(msg) {
+  const ts = msg.timestamp ? new Date(msg.timestamp).toLocaleTimeString() : '';
+  // TP-093: for broadcast per-agent ack markers, show recipient identity instead of "_broadcast"
+  let direction;
+  if (msg.to === 'supervisor') {
+    direction = '\u2190 supervisor';
+  } else if (msg._isBroadcast && msg._agentDir && msg._agentDir !== '_broadcast') {
+    direction = `\u2192 ${escapeHtml(msg._agentDir)} (broadcast)`;
+  } else {
+    direction = `\u2192 ${escapeHtml(msg.to || msg._agentDir || '')}`;
+  }
+  let statusBadge;
+  if (msg._status === 'pending') statusBadge = '<span class="msg-badge msg-pending">pending</span>';
+  else if (msg._status === 'delivered') statusBadge = '<span class="msg-badge msg-delivered">delivered</span>';
+  else if (msg._status === 'reply') statusBadge = '<span class="msg-badge msg-reply">reply</span>';
+  else if (msg._status === 'reply-acked') statusBadge = '<span class="msg-badge msg-delivered">reply (acked)</span>';
+  else statusBadge = '';
+  const typeBadge = `<span class="msg-badge msg-type">${escapeHtml(msg.type || '')}</span>`;
+  const preview = msg.content || '';
+  const broadcastTag = msg._isBroadcast ? ' <span class="msg-badge msg-type">broadcast</span>' : '';
+
+  return `<div class="message-row">`
+    + `<span class="msg-time">${escapeHtml(ts)}</span>`
+    + `<span class="msg-direction">${direction}</span>`
+    + typeBadge
+    + statusBadge
+    + broadcastTag
+    + `<span class="msg-preview">${escapeHtml(preview)}</span>`
+    + `</div>`;
+}
+
+
+// ─── Render: Errors ─────────────────────────────────────────────────────────
+
+function renderErrors(batch) {
+  const errors = batch?.errors || [];
+  if (errors.length === 0) {
+    $errorsPanel.style.display = "none";
+    return;
+  }
+  $errorsPanel.style.display = "";
+  let html = "";
+  for (const err of errors.slice(-10)) {
+    const msg = typeof err === "string" ? err : err.message || JSON.stringify(err);
+    html += `<div class="error-item"><span class="error-bullet">●</span><span class="error-text">${escapeHtml(msg)}</span></div>`;
+  }
+  $errorsBody.innerHTML = html;
+}
+
+// ─── Render: No Batch ───────────────────────────────────────────────────────
+
+let noBatchRendered = false;
+
+function renderNoBatch() {
+  if (noBatchRendered) return;
+  noBatchRendered = true;
+
+  // Hide repo filter when no batch
+  updateRepoFilter([]);
+
+  // Hide live panels, show history panel
+  const $lanesPanel = document.getElementById("lanes-tasks-panel");
+  const $mergePanel = document.getElementById("merge-panel");
+  if ($lanesPanel) $lanesPanel.style.display = "none";
+  if ($mergePanel) $mergePanel.style.display = "none";
+  if ($errorsPanel) $errorsPanel.style.display = "none";
+
+  // Show a placeholder while history loads. loadHistoryList() (called in
+  // render() just before this) is async — the fresh list may not be
+  // available yet. The loadHistoryList callback will replace this with
+  // the actual latest entry once it resolves.
+  if (!viewingHistoryId) {
+    $historyBody.innerHTML = `
+      <div class="no-batch">
+        <div class="no-batch-icon">⏳</div>
+        <div class="no-batch-title">Batch complete</div>
+        <div class="no-batch-hint">Loading history…</div>
+      </div>`;
+    $historyPanel.style.display = "";
+  }
+}
+
+function ensureContentPanels() {
+  if (noBatchRendered) {
+    // A live batch started — restore panels without full page reload.
+    // Reset the no-batch state and re-show content panels.
+    noBatchRendered = false;
+    const $lanesPanel = document.getElementById("lanes-tasks-panel");
+    const $mergePanel = document.getElementById("merge-panel");
+    if ($lanesPanel) $lanesPanel.style.display = "";
+    if ($mergePanel) $mergePanel.style.display = "";
+    if ($errorsPanel) $errorsPanel.style.display = "";
+    $historyPanel.style.display = "none";
+    viewingHistoryId = null;
+    // Re-render with current data
+    if (currentData) render(currentData);
+  }
+}
+
+// ─── Supervisor Panel ───────────────────────────────────────────────────────
+
+const $supervisorPanel        = $("supervisor-panel");
+const $supervisorStatusBadge  = $("supervisor-status-badge");
+const $supervisorCollapseBtn  = $("supervisor-collapse-btn");
+const $supervisorPanelBody    = $("supervisor-panel-body");
+const $supervisorStatusSection       = $("supervisor-status-section");
+const $supervisorConversationSection = $("supervisor-conversation-section");
+const $supervisorActionsSection      = $("supervisor-actions-section");
+const $supervisorSummarySection      = $("supervisor-summary-section");
+
+let supervisorCollapsed = false;
+
+// Toggle collapse on header click
+$("supervisor-panel-toggle").addEventListener("click", (e) => {
+  // Don't toggle when clicking the collapse button itself (it has its own handler)
+  if (e.target.id === "supervisor-collapse-btn") return;
+  toggleSupervisorPanel();
+});
+
+$supervisorCollapseBtn.addEventListener("click", toggleSupervisorPanel);
+
+function toggleSupervisorPanel() {
+  supervisorCollapsed = !supervisorCollapsed;
+  $supervisorPanelBody.style.display = supervisorCollapsed ? "none" : "";
+  $supervisorCollapseBtn.textContent = supervisorCollapsed ? "▸" : "▾";
+}
+
+/** Determine supervisor status from lock data. */
+function supervisorStatusInfo(lock) {
+  if (!lock) return { status: "inactive", label: "Inactive", cls: "supervisor-inactive" };
+  if (lock.stale) return { status: "stale", label: "Stale", cls: "supervisor-stale" };
+  return { status: "active", label: "Active", cls: "supervisor-active" };
+}
+
+/** Format a timestamp for the supervisor timeline. */
+function formatSupervisorTime(ts) {
+  if (!ts) return "";
+  const d = new Date(ts);
+  return d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit", second: "2-digit" });
+}
+
+/** Render the supervisor status indicator section. */
+function renderSupervisorStatus(supervisor) {
+  const lock = supervisor.lock;
+  const info = supervisorStatusInfo(lock);
+
+  // Update the header badge
+  $supervisorStatusBadge.textContent = info.label;
+  $supervisorStatusBadge.className = `supervisor-status-badge ${info.cls}`;
+
+  let html = '<div class="supervisor-status-row">';
+  html += `<span class="supervisor-status-dot ${info.cls}"></span>`;
+  html += `<span class="supervisor-status-label">${info.label}</span>`;
+
+  if (lock) {
+    if (lock.autonomy) {
+      html += `<span class="supervisor-autonomy-badge">${escapeHtml(lock.autonomy)}</span>`;
+    }
+    if (lock.heartbeat) {
+      html += `<span class="supervisor-heartbeat" title="Last heartbeat">♡ ${relativeTime(lock.heartbeat)}</span>`;
+    }
+    if (lock.sessionId) {
+      html += `<span class="supervisor-session-id" title="Session: ${escapeHtml(lock.sessionId)}">${escapeHtml(lock.sessionId)}</span>`;
+    }
+  }
+
+  html += '</div>';
+  $supervisorStatusSection.innerHTML = html;
+}
+
+/** Render the conversation history section. */
+function renderSupervisorConversation(supervisor) {
+  const conversation = supervisor.conversation || [];
+
+  if (conversation.length === 0) {
+    $supervisorConversationSection.innerHTML = '';
+    return;
+  }
+
+  let html = '<div class="supervisor-subsection-title">Conversation</div>';
+  html += '<div class="supervisor-conversation-list">';
+
+  for (const entry of conversation) {
+    const time = formatSupervisorTime(entry.ts || entry.timestamp);
+    const role = entry.role || "unknown";
+    const content = entry.content || entry.message || "";
+    const roleCls = role === "operator" ? "conv-role-operator" : "conv-role-supervisor";
+    const roleLabel = role === "operator" ? "Operator" : "Supervisor";
+
+    html += `<div class="supervisor-conv-entry ${roleCls}">`;
+    html += `  <div class="supervisor-conv-header">`;
+    html += `    <span class="supervisor-conv-role">${roleLabel}</span>`;
+    if (time) html += `<span class="supervisor-conv-time">${time}</span>`;
+    html += `  </div>`;
+    html += `  <div class="supervisor-conv-content">${escapeHtml(content)}</div>`;
+    html += `</div>`;
+  }
+
+  html += '</div>';
+  $supervisorConversationSection.innerHTML = html;
+}
+
+/**
+ * Human-readable labels for supervisor recovery action identifiers.
+ * The supervisor LLM writes snake_case action names to actions.jsonl.
+ * This map translates them to operator-friendly labels for the dashboard.
+ */
+const RECOVERY_ACTION_LABELS = {
+  // Conflict resolution
+  conflict_resolve_checkout_ours:   "Auto-resolved merge conflict (kept task changes)",
+  conflict_resolve_checkout_theirs: "Auto-resolved merge conflict (kept base changes)",
+  conflict_resolve_manual:          "Manual conflict resolution applied",
+
+  // Merge agent
+  merge_retry:                      "Retried merge agent",
+  merge_session_kill:               "Terminated stalled merge agent",
+  merge_force:                      "Forced merge with partial results",
+
+  // Worker / task
+  worker_wrap_up:                   "Sent wrap-up signal to stalled worker",
+  task_retry:                       "Retried failed task",
+  task_skip:                        "Skipped task — unblocked dependents",
+  wave_force_merge:                 "Force-merged wave with mixed results",
+
+  // Git / worktree
+  lock_clear:                       "Cleared stale git lock file",
+  worktree_remove:                  "Removed stale worktree",
+  worktree_prune:                   "Pruned stale worktrees",
+
+  // Batch lifecycle
+  abort_hard:                       "Hard-aborted batch",
+  batch_resume:                     "Resumed batch after recovery",
+  supervisor_handoff:               "Supervisor session handoff",
+
+  // Diagnostics (usually not shown — filtered as non-recovery)
+  initial_status_check:             "Checked initial batch status",
+  completion_status_check:          "Verified batch completion status",
+  read_state:                       "Read batch state",
+};
+
+/** Format a recovery action type string into a human-readable label. */
+function formatRecoveryActionLabel(type) {
+  return RECOVERY_ACTION_LABELS[type] || type.replace(/_/g, ' ').replace(/\b\w/g, c => c.toUpperCase());
+}
+
+/** Merge supervisor actions and Tier 0 recovery events into a unified timeline.
+ *  Actions from actions.jsonl and recovery events from events.jsonl are combined
+ *  and sorted chronologically (per R002: show both Tier 0 and supervisor actions).
+ */
+function buildRecoveryTimeline(supervisor) {
+  const actions = (supervisor.actions || []).map(a => ({
+    ts: a.ts || a.timestamp || 0,
+    tier: a.tier,
+    type: a.type || a.action || "unknown",
+    target: a.target || a.lane || a.taskId || "",
+    outcome: a.outcome || a.result || "",
+    reason: a.reason || "",
+    context: a.context || "",
+    detail: a.detail || "",
+    source: "action"
+  }));
+
+  // Include Tier 0 recovery events from events.jsonl
+  const events = (supervisor.events || [])
+    .filter(e => e.tier === 0 || e.type === "recovery" || e.type === "tier0_recovery")
+    .map(e => ({
+      ts: e.ts || e.timestamp || 0,
+      tier: e.tier != null ? e.tier : 0,
+      type: e.type || "event",
+      target: e.target || e.lane || e.taskId || "",
+      outcome: e.outcome || e.result || "",
+      reason: e.reason || e.message || "",
+      context: e.context || "",
+      detail: e.detail || "",
+      source: "event"
+    }));
+
+  const timeline = [...actions, ...events];
+  timeline.sort((a, b) => {
+    const tA = typeof a.ts === "string" ? new Date(a.ts).getTime() : a.ts;
+    const tB = typeof b.ts === "string" ? new Date(b.ts).getTime() : b.ts;
+    return tA - tB;
+  });
+
+  return timeline;
+}
+
+/** Render the recovery action timeline section. */
+function renderSupervisorActions(supervisor) {
+  const timeline = buildRecoveryTimeline(supervisor);
+
+  if (timeline.length === 0) {
+    $supervisorActionsSection.innerHTML = '';
+    return;
+  }
+
+  let html = '<div class="supervisor-subsection-title">Recovery Actions</div>';
+  html += '<div class="supervisor-timeline">';
+
+  for (const entry of timeline) {
+    const time = formatSupervisorTime(entry.ts);
+    const tier = entry.tier != null ? `T${entry.tier}` : "";
+    const type = entry.type;
+    const target = entry.target;
+    const outcome = entry.outcome;
+    const reason = entry.reason;
+    const description = entry.context || entry.detail || "";
+
+    const outcomeCls = outcome === "success" || outcome === "recovered"
+      ? "action-success"
+      : outcome === "failed" || outcome === "error"
+        ? "action-failed"
+        : "action-pending";
+
+    html += `<div class="supervisor-action-entry">`;
+    html += `  <div class="supervisor-action-left">`;
+    html += `    <span class="supervisor-action-time">${time}</span>`;
+    html += `    <span class="supervisor-action-dot ${outcomeCls}"></span>`;
+    html += `  </div>`;
+    html += `  <div class="supervisor-action-right">`;
+    html += `    <div class="supervisor-action-header">`;
+    if (tier) html += `<span class="supervisor-action-tier">${tier}</span>`;
+    html += `      <span class="supervisor-action-type" title="${escapeHtml(type)}">${escapeHtml(formatRecoveryActionLabel(type))}</span>`;
+    if (target) html += `<span class="supervisor-action-target">${escapeHtml(target)}</span>`;
+    if (outcome) html += `<span class="supervisor-action-outcome ${outcomeCls}">${escapeHtml(outcome)}</span>`;
+    html += `    </div>`;
+    if (description) {
+      const fullDesc = escapeHtml(description);
+      const truncated = description.length > 100 ? escapeHtml(description.slice(0, 100)) + "\u2026" : fullDesc;
+      html += `<div class="supervisor-action-description" title="${fullDesc}">${truncated}</div>`;
+    }
+    if (reason) {
+      html += `<div class="supervisor-action-reason">${escapeHtml(reason)}</div>`;
+    }
+    html += `  </div>`;
+    html += `</div>`;
+  }
+
+  html += '</div>';
+  $supervisorActionsSection.innerHTML = html;
+}
+
+/** Render the batch summary section (from summary.md). */
+function renderSupervisorSummary(supervisor) {
+  const summary = supervisor.summary;
+
+  if (!summary) {
+    $supervisorSummarySection.innerHTML = '';
+    return;
+  }
+
+  let html = '<div class="supervisor-subsection-title">Batch Summary</div>';
+  html += '<div class="supervisor-summary-content">';
+  // Render the summary markdown using the STATUS.md renderer (reuse)
+  const { html: renderedMd } = renderStatusMd(summary);
+  html += renderedMd;
+  html += '</div>';
+  $supervisorSummarySection.innerHTML = html;
+}
+
+/** Main supervisor panel render function. */
+function renderSupervisor(data) {
+  const supervisor = data.supervisor;
+
+  if (!supervisor) {
+    $supervisorPanel.style.display = "none";
+    return;
+  }
+
+  $supervisorPanel.style.display = "";
+
+  renderSupervisorStatus(supervisor);
+  renderSupervisorConversation(supervisor);
+  renderSupervisorActions(supervisor);
+  renderSupervisorSummary(supervisor);
+}
+
+// ─── Full Render ────────────────────────────────────────────────────────────
+
+// ─── Current data (stored for conversation viewer) ──────────────────────────
+
+let currentData = null;
+
+function render(data) {
+  currentData = data;
+  const batch = data.batch;
+  const sessions = data.sessions ?? data.tmuxSessions ?? [];
+
+  $lastUpdate.textContent = new Date().toLocaleTimeString();
+
+  if (!batch) {
+    // #507: A single missed poll during batch startup (batch-state.json being
+    // written) is not a real "batch disappeared" signal. Only act on no-batch
+    // after N consecutive polls confirm it, so we don't flash the history
+    // view between two live batches.
+    consecutiveNoBatchPolls += 1;
+    if (consecutiveNoBatchPolls < NO_BATCH_DEBOUNCE_THRESHOLD) {
+      // Hold the previous render in place. Still tick the timestamp so the
+      // user knows the SSE stream is alive.
+      return;
+    }
+    // TP-178: Clear viewer when batch disappears (#487)
+    if (lastBatchId && viewerMode) closeViewer();
+    lastBatchId = null;
+    renderHeader(null);
+    renderSummary(null);
+    renderSupervisor(data);
+    // Refresh history list (batch may have just finished)
+    if (!noBatchRendered) loadHistoryList();
+    renderNoBatch();
+    return;
+  }
+
+  // Batch present — reset the no-batch debounce counter (#507).
+  consecutiveNoBatchPolls = 0;
+
+  // TP-178: Detect batchId change — clear stale viewer state (#487)
+  if (batch.batchId && lastBatchId && batch.batchId !== lastBatchId && viewerMode) {
+    closeViewer();
+  }
+  lastBatchId = batch.batchId || null;
+
+  // Live batch is running — hide history panel, reset viewing state
+  if (viewingHistoryId) {
+    viewingHistoryId = null;
+    $historyPanel.style.display = "none";
+    $historySelect.value = "";
+  }
+
+  if (noBatchRendered) {
+    ensureContentPanels();
+    return;
+  }
+
+  renderHeader(batch);
+  renderSummary(batch);
+
+  // Update repo filter based on current batch data
+  const repos = buildRepoSet(batch);
+  updateRepoFilter(repos);
+
+  renderSupervisor(data);
+  renderLanesTasks(batch, sessions);
+  renderMergeAgents(batch, sessions);
+  // TP-107: Runtime V2 panels
+  renderAgentsPanel(data.runtimeRegistry);
+  renderMessagesPanel(data.mailbox);
+  renderErrors(batch);
+
+  const taskCount = (batch.tasks || []).length;
+  const laneCount = (batch.lanes || []).length;
+  const waveCount = (batch.wavePlan || []).length;
+  $footerInfo.textContent = `${taskCount} tasks · ${laneCount} lanes · ${waveCount} waves`;
+}
+
+// ─── SSE Connection ─────────────────────────────────────────────────────────
+
+let eventSource = null;
+let reconnectTimer = null;
+
+function connect() {
+  if (eventSource) eventSource.close();
+
+  eventSource = new EventSource("/api/stream");
+
+  eventSource.onopen = () => {
+    $connDot.className = "connection-dot connected";
+    $connDot.title = "Connected";
+    clearTimeout(reconnectTimer);
+  };
+
+  eventSource.onmessage = (event) => {
+    try {
+      const data = JSON.parse(event.data);
+      render(data);
+    } catch (err) {
+      console.error("Failed to parse SSE data:", err);
+    }
+  };
+
+  eventSource.onerror = () => {
+    $connDot.className = "connection-dot disconnected";
+    $connDot.title = "Disconnected — reconnecting…";
+    eventSource.close();
+    reconnectTimer = setTimeout(connect, 3000);
+  };
+}
+
+// ─── Viewer Panel (Conversation + STATUS.md) ────────────────────────────────
+
+const $terminalPanel = document.getElementById("terminal-panel");
+const $terminalTitle = document.getElementById("terminal-title");
+const $terminalBody  = document.getElementById("terminal-body");
+const $terminalClose = document.getElementById("terminal-close");
+const $autoScrollCheckbox = document.getElementById("auto-scroll-checkbox");
+const $autoScrollText = document.getElementById("auto-scroll-text");
+
+// Viewer state
+let viewerTimer = null;
+let autoScrollOn = false;
+let isProgrammaticScroll = false;
+
+// Conversation append-only state
+let convRenderedLines = 0;
+
+// STATUS.md diff-and-skip state
+let lastStatusMdText = "";
+
+// ── Open conversation viewer (TP-107: V2 events preferred, legacy fallback) ──
+
+/**
+ * Resolve a lane session ID to a Runtime V2 agent ID via the registry.
+ * Returns null if no V2 registry data is available.
+ */
+function resolveV2AgentId(sessionName) {
+  if (!currentData || !currentData.runtimeRegistry || !currentData.runtimeRegistry.agents) return null;
+  const agents = currentData.runtimeRegistry.agents;
+  // Direct match on agentId
+  if (agents[sessionName]) return sessionName;
+  // Match by session ID prefix + "-worker" suffix (common V2 naming)
+  const workerKey = sessionName + '-worker';
+  if (agents[workerKey]) return workerKey;
+  // Search by laneNumber match from lane snapshots
+  for (const [id, agent] of Object.entries(agents)) {
+    if (agent.role === 'worker' && agent.laneNumber != null) {
+      const m = sessionName.match(/lane-(\d+)/);
+      if (m && parseInt(m[1]) === agent.laneNumber) return id;
+    }
+  }
+  return null;
+}
+
+let viewerV2AgentId = null; // Runtime V2 agent ID for current conversation view
+
+function viewConversation(sessionName) {
+  // Toggle off if already viewing this session
+  if (viewerMode === 'conversation' && viewerTarget === sessionName && $terminalPanel.style.display !== 'none') {
+    closeViewer();
+    return;
+  }
+
+  closeViewer();
+
+  viewerMode = 'conversation';
+  viewerTarget = sessionName;
+  autoScrollOn = true;
+  convRenderedLines = 0;
+
+  // TP-107: Resolve V2 agent ID for events endpoint
+  const v2AgentId = resolveV2AgentId(sessionName);
+  viewerV2AgentId = v2AgentId;
+
+  const label = v2AgentId || sessionName;
+  $terminalTitle.textContent = `Worker Conversation — ${label}`;
+  $autoScrollText.textContent = 'Follow feed';
+  $autoScrollCheckbox.checked = true;
+  $terminalPanel.style.display = '';
+  $terminalBody.innerHTML = '<div class="conv-stream"></div>';
+
+  pollConversation();
+  viewerTimer = setInterval(pollConversation, 2000);
+
+  $terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function pollConversation() {
+  // TP-107: prefer V2 agent events when available, fallback to legacy conversation
+  const endpoint = viewerV2AgentId
+    ? `/api/agent-events/${encodeURIComponent(viewerV2AgentId)}`
+    : `/api/conversation/${encodeURIComponent(viewerTarget)}`;
+  const isV2 = !!viewerV2AgentId;
+
+  fetch(endpoint)
+    .then(r => isV2 ? r.json() : r.text())
+    .then(data => {
+      if (isV2) {
+        renderV2AgentEvents(data);
+        return;
+      }
+      // Legacy: data is JSONL text
+      const text = data;
+      if (!text.trim()) {
+        if (convRenderedLines === 0) {
+          $terminalBody.innerHTML = '<div class="conv-empty">No conversation events yet…</div>';
+        }
+        return;
+      }
+
+      const lines = text.trim().split('\n');
+
+      // File was reset (new task on same lane) — full re-render
+      if (lines.length < convRenderedLines) {
+        convRenderedLines = 0;
+        const container = $terminalBody.querySelector('.conv-stream');
+        if (container) container.innerHTML = '';
+      }
+
+      // Nothing new
+      if (lines.length === convRenderedLines) return;
+
+      // Ensure container exists
+      let container = $terminalBody.querySelector('.conv-stream');
+      if (!container) {
+        $terminalBody.innerHTML = '';
+        container = document.createElement('div');
+        container.className = 'conv-stream';
+        $terminalBody.appendChild(container);
+      }
+
+      // Append only new events
+      const newLines = lines.slice(convRenderedLines);
+      for (const line of newLines) {
+        try {
+          const event = JSON.parse(line);
+          const html = renderConvEvent(event);
+          if (html) container.insertAdjacentHTML('beforeend', html);
+        } catch { continue; }
+      }
+
+      convRenderedLines = lines.length;
+
+      // Auto-scroll to bottom
+      if (autoScrollOn) {
+        isProgrammaticScroll = true;
+        $terminalBody.scrollTop = $terminalBody.scrollHeight;
+        requestAnimationFrame(() => { isProgrammaticScroll = false; });
+      }
+    })
+    .catch(() => {});
+}
+
+// ── Runtime V2 agent event renderer (TP-107) ──────────────────────────────
+
+// Stable cursor for V2 event rendering.
+// Uses a signature string from the last rendered event so the sliding window
+// (server caps at 300) doesn't stall when new tail events push older ones out.
+let v2LastCursor = null; // signature of last rendered event
+let v2FirstRender = true;
+
+function v2EventSignature(evt) {
+  return `${evt.ts || 0}:${evt.type || ''}:${JSON.stringify(evt.payload || {}).slice(0, 80)}`;
+}
+
+function renderV2AgentEvents(events) {
+  if (!Array.isArray(events) || events.length === 0) {
+    if (v2FirstRender) {
+      $terminalBody.innerHTML = '<div class="conv-empty">No agent events yet…</div>';
+    }
+    return;
+  }
+
+  let container = $terminalBody.querySelector('.conv-stream');
+
+  if (v2FirstRender || !container) {
+    // First load or container missing: full render
+    $terminalBody.innerHTML = '';
+    container = document.createElement('div');
+    container.className = 'conv-stream';
+    $terminalBody.appendChild(container);
+    for (const evt of events) {
+      const html = renderV2Event(evt);
+      if (html) container.insertAdjacentHTML('beforeend', html);
+    }
+    v2LastCursor = v2EventSignature(events[events.length - 1]);
+    v2FirstRender = false;
+  } else {
+    // Incremental: find first unseen event after cursor
+    let cursorIdx = -1;
+    if (v2LastCursor) {
+      for (let i = events.length - 1; i >= 0; i--) {
+        if (v2EventSignature(events[i]) === v2LastCursor) {
+          cursorIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (cursorIdx === -1) {
+      // Cursor not found (rotation/restart): full re-render
+      container.innerHTML = '';
+      for (const evt of events) {
+        const html = renderV2Event(evt);
+        if (html) container.insertAdjacentHTML('beforeend', html);
+      }
+    } else if (cursorIdx < events.length - 1) {
+      // Append only new events after cursor
+      const newEvents = events.slice(cursorIdx + 1);
+      for (const evt of newEvents) {
+        const html = renderV2Event(evt);
+        if (html) container.insertAdjacentHTML('beforeend', html);
+      }
+    } else {
+      // No new events
+      return;
+    }
+
+    v2LastCursor = v2EventSignature(events[events.length - 1]);
+  }
+
+  if (autoScrollOn) {
+    isProgrammaticScroll = true;
+    $terminalBody.scrollTop = $terminalBody.scrollHeight;
+    requestAnimationFrame(() => { isProgrammaticScroll = false; });
+  }
+}
+
+function renderV2Event(evt) {
+  const ts = evt.ts ? new Date(evt.ts).toLocaleTimeString() : '';
+  const type = evt.type || 'unknown';
+
+  switch (type) {
+    case 'assistant_message':
+      return `<div class="conv-event conv-assistant"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">assistant</span><span class="conv-text">${escapeHtml((evt.payload?.text || '').slice(0, 2000))}</span></div>`;
+    case 'prompt_sent':
+      return `<div class="conv-event conv-user"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">user</span><span class="conv-text">${escapeHtml((evt.payload?.text || '').slice(0, 2000))}</span></div>`;
+    case 'tool_call':
+      return `<div class="conv-event conv-tool"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">tool</span><span class="conv-text">${escapeHtml(evt.payload?.tool || type)} ${escapeHtml((evt.payload?.path || '').slice(0, 200))}</span></div>`;
+    case 'tool_result':
+      return `<div class="conv-event conv-tool-result"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">result</span><span class="conv-text">${escapeHtml((evt.payload?.summary || '').slice(0, 500))}</span></div>`;
+    case 'agent_started':
+      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">▶</span><span class="conv-text">Agent started (${escapeHtml(evt.role || '')} lane ${evt.laneNumber ?? '?'})</span></div>`;
+    case 'agent_exited':
+      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">■</span><span class="conv-text">Agent exited (code ${evt.payload?.exitCode ?? '?'})</span></div>`;
+    case 'agent_crashed':
+    case 'agent_killed':
+    case 'agent_timeout':
+      return `<div class="conv-event conv-lifecycle conv-error"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">⚠</span><span class="conv-text">${escapeHtml(type)} ${escapeHtml(evt.payload?.reason || '')}</span></div>`;
+    case 'message_delivered':
+      return `<div class="conv-event conv-steer"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">✉</span><span class="conv-text">Steering: ${escapeHtml((evt.payload?.content || '').slice(0, 500))}</span></div>`;
+    case 'context_pressure':
+      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">⚠</span><span class="conv-text">Context pressure: ${evt.payload?.pct ?? '?'}%</span></div>`;
+    default:
+      return `<div class="conv-event conv-lifecycle"><span class="conv-ts">${escapeHtml(ts)}</span><span class="conv-role">•</span><span class="conv-text">${escapeHtml(type)}</span></div>`;
+  }
+}
+
+// ── Segment-Scoped STATUS.md Helpers (TP-176) ──────────────────────────────
+
+/**
+ * Resolve the active segment repoId for a given task.
+ * Uses runtimeLaneSnapshots (active segment) and falls back to
+ * taskSegmentProgress (batch state).
+ * Returns { repoId, segmentInfo } or null if single-segment / unresolvable.
+ */
+function resolveActiveSegmentForTask(taskId) {
+  if (!currentData) return null;
+  const batch = currentData.batch;
+  if (!batch) return null;
+  const task = (batch.tasks || []).find(t => t.taskId === taskId);
+  if (!task) return null;
+  const segmentIds = Array.isArray(task.segmentIds) ? task.segmentIds.filter(id => typeof id === "string") : [];
+  if (segmentIds.length <= 1) return null; // single-segment or no segments
+
+  // Try to get active segment from runtime lane snapshots
+  const v2Snapshots = currentData.runtimeLaneSnapshots || {};
+  for (const snap of Object.values(v2Snapshots)) {
+    if (snap && snap.taskId === taskId && snap.segmentId) {
+      const parsed = parseSegmentId(snap.segmentId);
+      if (parsed) {
+        const idx = segmentIds.indexOf(snap.segmentId);
+        return {
+          repoId: parsed.repoId,
+          segmentInfo: {
+            index: idx >= 0 ? idx + 1 : null,
+            total: segmentIds.length,
+            repoId: parsed.repoId,
+            segmentId: snap.segmentId,
+          },
+        };
+      }
+    }
+  }
+
+  // Fallback: use taskSegmentProgress (batch state)
+  const segmentStatusMap = buildSegmentStatusMap(batch);
+  const info = taskSegmentProgress(task, segmentStatusMap, null);
+  if (info && info.repoId) {
+    return { repoId: info.repoId, segmentInfo: info };
+  }
+  return null;
+}
+
+/**
+ * Filter STATUS.md content to show only the active segment's blocks.
+ * Within each `### Step N:` section, removes `#### Segment: <otherRepo>` blocks
+ * and keeps only the block matching `activeRepoId`.
+ * Non-step content (metadata, notes, reviews, etc.) is preserved.
+ *
+ * Returns the filtered markdown string, or the original if no segment markers found.
+ */
+function filterStatusMdForSegment(markdown, activeRepoId) {
+  if (!activeRepoId) return markdown;
+  const lines = markdown.split('\n');
+  const result = [];
+  let inStep = false;          // inside a ### Step section
+  let inSegmentBlock = false;  // inside a #### Segment: <repo> block
+  let segmentMatch = false;    // current segment block matches active repo
+  let foundAnySegmentHeader = false;
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Detect step headers: ### Step N: ...
+    if (/^###\s+Step\s+\d+/.test(line)) {
+      inStep = true;
+      inSegmentBlock = false;
+      segmentMatch = false;
+      result.push(line);
+      continue;
+    }
+
+    // Detect non-step ### headers (e.g., ### Reviews, ### Notes)
+    if (/^###\s+/.test(line) && !/^###\s+Step\s+\d+/.test(line)) {
+      inStep = false;
+      inSegmentBlock = false;
+      segmentMatch = false;
+      result.push(line);
+      continue;
+    }
+
+    // Inside a step section, detect #### Segment: <repoId> headers
+    if (inStep && /^####\s+Segment:\s*/.test(line)) {
+      foundAnySegmentHeader = true;
+      const segRepo = line.replace(/^####\s+Segment:\s*/, '').trim();
+      inSegmentBlock = true;
+      segmentMatch = (segRepo === activeRepoId);
+      if (segmentMatch) {
+        result.push(line);
+      }
+      continue;
+    }
+
+    // Detect any other #### header (ends current segment block)
+    if (/^####\s+/.test(line)) {
+      inSegmentBlock = false;
+      segmentMatch = false;
+      result.push(line);
+      continue;
+    }
+
+    // If we're in a segment block, only include matching lines
+    if (inSegmentBlock) {
+      if (segmentMatch) {
+        result.push(line);
+      }
+      continue;
+    }
+
+    // Outside segment blocks: keep the line
+    result.push(line);
+  }
+
+  // If no segment headers were found, return original (fallback for single-segment)
+  if (!foundAnySegmentHeader) return markdown;
+  return result.join('\n');
+}
+
+// ── Open STATUS.md viewer ───────────────────────────────────────────────────
+
+function viewStatusMd(taskId) {
+  // Toggle off if already viewing this task
+  if (viewerMode === 'status-md' && viewerTarget === taskId && $terminalPanel.style.display !== 'none') {
+    closeViewer();
+    return;
+  }
+
+  closeViewer();
+
+  viewerMode = 'status-md';
+  viewerTarget = taskId;
+  autoScrollOn = false;
+  lastStatusMdText = '';
+
+  // TP-176: Include segment context in title for multi-segment tasks
+  const segData = resolveActiveSegmentForTask(taskId);
+  if (segData && segData.segmentInfo) {
+    const label = segmentProgressText(segData.segmentInfo);
+    $terminalTitle.textContent = `STATUS.md — ${taskId} · ${label}`;
+  } else {
+    $terminalTitle.textContent = `STATUS.md — ${taskId}`;
+  }
+
+  $autoScrollText.textContent = 'Track progress';
+  $autoScrollCheckbox.checked = false;
+  $terminalPanel.style.display = '';
+  $terminalBody.innerHTML = '<div class="conv-empty">Loading…</div>';
+
+  pollStatusMd();
+  viewerTimer = setInterval(pollStatusMd, 2000);
+
+  $terminalPanel.scrollIntoView({ behavior: 'smooth', block: 'nearest' });
+}
+
+function pollStatusMd() {
+  fetch(`/api/status-md/${encodeURIComponent(viewerTarget)}`)
+    .then(r => {
+      if (!r.ok) throw new Error('not found');
+      return r.text();
+    })
+    .then(text => {
+      // TP-176: Apply segment-scoped filtering for multi-segment tasks.
+      // Re-resolve on each poll since the active segment may change.
+      const segData = resolveActiveSegmentForTask(viewerTarget);
+      let displayText = text;
+      if (segData && segData.repoId) {
+        displayText = filterStatusMdForSegment(text, segData.repoId);
+        // Update title with current segment context (may change between polls)
+        const label = segmentProgressText(segData.segmentInfo);
+        $terminalTitle.textContent = `STATUS.md \u2014 ${viewerTarget} \u00b7 ${label}`;
+      }
+
+      // Diff-and-skip: no change, no DOM update
+      if (displayText === lastStatusMdText) return;
+      lastStatusMdText = displayText;
+
+      const { html, hasLastChecked } = renderStatusMd(displayText);
+      $terminalBody.innerHTML = html;
+
+      // Update tracking highlight
+      updateTrackingHighlight();
+
+      // Auto-scroll to last checked item
+      if (autoScrollOn && hasLastChecked) {
+        scrollToLastChecked();
+      }
+    })
+    .catch(() => {
+      if (!lastStatusMdText) {
+        $terminalBody.innerHTML = '<div class="conv-empty">STATUS.md not found</div>';
+      }
+    });
+}
+
+// ── STATUS.md renderer ──────────────────────────────────────────────────────
+
+function renderStatusMd(markdown) {
+  const lines = markdown.split('\n');
+  let lastCheckedIdx = -1;
+
+  // First pass: find last checked item
+  for (let i = 0; i < lines.length; i++) {
+    if (/^\s*-\s*\[x\]/i.test(lines[i])) lastCheckedIdx = i;
+  }
+
+  let html = '<div class="status-md-content">';
+
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+
+    // Headings
+    const hMatch = line.match(/^(#{1,6})\s+(.+)/);
+    if (hMatch) {
+      const lvl = Math.min(hMatch[1].length, 4);
+      html += `<div class="status-md-h${lvl}">${renderInlineMd(hMatch[2])}</div>`;
+      continue;
+    }
+
+    // Checked checkbox
+    if (/^\s*-\s*\[x\]/i.test(line)) {
+      const text = line.replace(/^\s*-\s*\[x\]\s*/i, '');
+      const isLast = i === lastCheckedIdx;
+      const cls = isLast ? 'status-md-check checked last-checked' : 'status-md-check checked';
+      const id = isLast ? ' id="last-checked"' : '';
+      html += `<div class="${cls}"${id}><span class="check-box">☑</span><span>${renderInlineMd(text)}</span></div>`;
+      continue;
+    }
+
+    // Unchecked checkbox
+    if (/^\s*-\s*\[\s\]/.test(line)) {
+      const text = line.replace(/^\s*-\s*\[\s\]\s*/, '');
+      html += `<div class="status-md-check unchecked"><span class="check-box">☐</span><span>${renderInlineMd(text)}</span></div>`;
+      continue;
+    }
+
+    // List item
+    const liMatch = line.match(/^\s*-\s+(.*)/);
+    if (liMatch) {
+      html += `<div class="status-md-li">• ${renderInlineMd(liMatch[1])}</div>`;
+      continue;
+    }
+
+    // Empty line
+    if (!line.trim()) {
+      html += '<div class="status-md-spacer"></div>';
+      continue;
+    }
+
+    // Plain text
+    html += `<div class="status-md-text">${renderInlineMd(line)}</div>`;
+  }
+
+  html += '</div>';
+  return { html, hasLastChecked: lastCheckedIdx >= 0 };
+}
+
+function renderInlineMd(text) {
+  let s = escapeHtml(text);
+  s = s.replace(/\*\*(.+?)\*\*/g, '<strong>$1</strong>');
+  s = s.replace(/`(.+?)`/g, '<code class="status-md-code">$1</code>');
+  return s;
+}
+
+// ── Conversation event renderer ─────────────────────────────────────────────
+
+function renderConvEvent(event) {
+  switch (event.type) {
+    case "message_update": {
+      const delta = event.assistantMessageEvent;
+      if (delta?.type === "text_delta" && delta.delta) {
+        return `<span class="conv-text">${escapeHtml(delta.delta)}</span>`;
+      }
+      if (delta?.type === "thinking_delta" && delta.delta) {
+        return `<span class="conv-thinking">${escapeHtml(delta.delta)}</span>`;
+      }
+      return "";
+    }
+
+    case "tool_call": {
+      const name = event.toolName || "unknown";
+      const argsStr = event.args?.path || event.args?.command || "";
+      return `<div class="conv-tool-call"><span class="conv-tool-name">🔧 ${escapeHtml(name)}</span> <span class="conv-tool-args">${escapeHtml(String(argsStr).substring(0, 200))}</span></div>`;
+    }
+
+    case "tool_execution_start": {
+      const name = event.toolName || "unknown";
+      const argsStr = event.args?.path || event.args?.command || "";
+      return `<div class="conv-tool-call"><span class="conv-tool-name">🔧 ${escapeHtml(name)}</span> <span class="conv-tool-args">${escapeHtml(String(argsStr).substring(0, 200))}</span></div>`;
+    }
+
+    case "tool_result": {
+      const output = event.output || event.result || "";
+      const truncated = String(output).length > 500 ? String(output).substring(0, 500) + "…" : String(output);
+      return `<div class="conv-tool-result"><pre>${escapeHtml(truncated)}</pre></div>`;
+    }
+
+    case "message_end": {
+      const usage = event.message?.usage;
+      if (usage) {
+        const tokens = usage.totalTokens || (usage.input + usage.output) || 0;
+        return `<div class="conv-usage">Tokens: ${tokens.toLocaleString()}</div>`;
+      }
+      return "";
+    }
+
+    default:
+      return "";
+  }
+}
+
+// ── Auto-scroll logic ───────────────────────────────────────────────────────
+
+function scrollToLastChecked() {
+  const el = document.getElementById('last-checked');
+  if (!el) return;
+  isProgrammaticScroll = true;
+  el.scrollIntoView({ behavior: 'smooth', block: 'center' });
+  setTimeout(() => { isProgrammaticScroll = false; }, 600);
+}
+
+function updateTrackingHighlight() {
+  const container = $terminalBody.querySelector('.status-md-content');
+  if (container) {
+    container.classList.toggle('tracking', autoScrollOn && viewerMode === 'status-md');
+  }
+}
+
+$autoScrollCheckbox.addEventListener('change', () => {
+  autoScrollOn = $autoScrollCheckbox.checked;
+  if (autoScrollOn) {
+    if (viewerMode === 'conversation') {
+      isProgrammaticScroll = true;
+      $terminalBody.scrollTop = $terminalBody.scrollHeight;
+      requestAnimationFrame(() => { isProgrammaticScroll = false; });
+    } else if (viewerMode === 'status-md') {
+      scrollToLastChecked();
+      updateTrackingHighlight();
+    }
+  } else {
+    updateTrackingHighlight();
+  }
+});
+
+$terminalBody.addEventListener('scroll', () => {
+  if (isProgrammaticScroll) return;
+
+  if (viewerMode === 'conversation') {
+    const isAtBottom = $terminalBody.scrollTop + $terminalBody.clientHeight >= $terminalBody.scrollHeight - 30;
+    if (isAtBottom && !autoScrollOn) {
+      autoScrollOn = true;
+      $autoScrollCheckbox.checked = true;
+    } else if (!isAtBottom && autoScrollOn) {
+      autoScrollOn = false;
+      $autoScrollCheckbox.checked = false;
+    }
+  } else if (viewerMode === 'status-md') {
+    if (autoScrollOn) {
+      autoScrollOn = false;
+      $autoScrollCheckbox.checked = false;
+      updateTrackingHighlight();
+    }
+  }
+});
+
+// ── Close viewer ────────────────────────────────────────────────────────────
+
+function closeViewer() {
+  if (viewerTimer) {
+    clearInterval(viewerTimer);
+    viewerTimer = null;
+  }
+  viewerMode = null;
+  viewerTarget = null;
+  viewerV2AgentId = null;
+  autoScrollOn = false;
+  convRenderedLines = 0;
+  v2LastCursor = null;
+  v2FirstRender = true;
+  lastStatusMdText = '';
+  $terminalPanel.style.display = 'none';
+  $terminalBody.innerHTML = '';
+}
+
+$terminalClose.addEventListener('click', closeViewer);
+
+// Make viewer functions available globally for onclick handlers
+window.viewConversation = viewConversation;
+window.viewStatusMd = viewStatusMd;
+
+// ─── History ────────────────────────────────────────────────────────────────
+
+/** Fetch the compact history list and populate the dropdown. */
+function loadHistoryList() {
+  fetch("/api/history")
+    .then(r => r.json())
+    .then(list => {
+      historyList = list || [];
+      renderHistoryDropdown();
+      // Auto-select the latest history entry when no live batch is running.
+      // Always update the view here — renderNoBatch() shows a placeholder
+      // while this async fetch completes, so we need to replace it with
+      // the actual latest entry. This fixes #20 where the stale cached
+      // historyList caused the previous batch to be shown.
+      if (noBatchRendered && historyList.length > 0) {
+        viewHistoryEntry(historyList[0].batchId);
+        $historySelect.value = historyList[0].batchId;
+      } else if (noBatchRendered && historyList.length === 0) {
+        $historyBody.innerHTML = `
+          <div class="no-batch">
+            <div class="no-batch-icon">⏳</div>
+            <div class="no-batch-title">No batch running</div>
+            <div class="no-batch-hint">.pi/batch-state.json not found<br>Start an orchestrator batch to see the dashboard.</div>
+          </div>`;
+        $historyPanel.style.display = "";
+      }
+    })
+    .catch(() => {});
+}
+
+function renderHistoryDropdown() {
+  $historySelect.innerHTML = '<option value="">History ▾</option>';
+  for (const h of historyList) {
+    const d = new Date(h.startedAt);
+    const dateStr = d.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+    const timeStr = d.toLocaleTimeString("en-US", { hour: "2-digit", minute: "2-digit" });
+    const statusIcon = h.status === "completed" ? "✓" : h.status === "partial" ? "⚠" : "✗";
+    const label = `${statusIcon} ${dateStr} ${timeStr} — ${h.totalTasks}tasks ${formatDuration(h.durationMs)}`;
+    const opt = document.createElement("option");
+    opt.value = h.batchId;
+    opt.textContent = label;
+    $historySelect.appendChild(opt);
+  }
+}
+
+/** Load and display a specific historical batch. */
+function viewHistoryEntry(batchId) {
+  if (!batchId) {
+    viewingHistoryId = null;
+    $historyPanel.style.display = "none";
+    return;
+  }
+  viewingHistoryId = batchId;
+  fetch(`/api/history/${encodeURIComponent(batchId)}`)
+    .then(r => r.json())
+    .then(entry => {
+      if (entry.error) {
+        $historyBody.innerHTML = `<div class="empty-state">${escapeHtml(entry.error)}</div>`;
+      } else {
+        renderHistorySummary(entry);
+      }
+      $historyPanel.style.display = "";
+    })
+    .catch(() => {
+      $historyBody.innerHTML = '<div class="empty-state">Failed to load batch details</div>';
+      $historyPanel.style.display = "";
+    });
+}
+
+/** Render a full batch history summary. */
+function renderHistorySummary(entry) {
+  const startDate = new Date(entry.startedAt).toLocaleString();
+  const endDate = entry.endedAt ? new Date(entry.endedAt).toLocaleString() : "—";
+  const tok = entry.tokens || {};
+  const totalIn = (tok.input || 0) + (tok.cacheRead || 0);
+  let tokenStr = `↑${formatTokens(totalIn)} ↓${formatTokens(tok.output || 0)}`;
+  const costStr = formatCost(tok.costUsd || 0);
+
+  let html = `
+    <div class="history-header">
+      <span class="batch-id">${escapeHtml(entry.batchId)}</span>
+      <span class="batch-status ${entry.status}">${entry.status}</span>
+      <span class="batch-time">${startDate} → ${endDate}</span>
+    </div>
+
+    <div class="history-stats">
+      <div class="stat-card">
+        <div class="stat-value">${entry.totalTasks}</div>
+        <div class="stat-label">Total Tasks</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="color:var(--green)">${entry.succeededTasks}</div>
+        <div class="stat-label">Succeeded</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value" style="color:${entry.failedTasks > 0 ? 'var(--red)' : 'var(--text-muted)'}">${entry.failedTasks}</div>
+        <div class="stat-label">Failed</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${entry.totalWaves}</div>
+        <div class="stat-label">Waves</div>
+      </div>
+      <div class="stat-card">
+        <div class="stat-value">${formatDuration(entry.durationMs)}</div>
+        <div class="stat-label">Duration</div>
+      </div>
+      <div class="stat-card stat-tokens">
+        <div class="stat-value">🪙 ${tokenStr}</div>
+        <div class="stat-label">Tokens</div>
+      </div>
+      ${costStr ? `<div class="stat-card">
+        <div class="stat-value" style="color:var(--yellow)">${costStr}</div>
+        <div class="stat-label">Cost</div>
+      </div>` : ""}
+    </div>`;
+
+  // Wave table
+  if (entry.waves && entry.waves.length > 0) {
+    html += `<div class="history-section-title">Waves</div>`;
+    html += `<table class="history-waves-table"><thead><tr>
+      <th>Wave</th><th>Tasks</th><th>Merge</th><th>Duration</th><th>Tokens</th><th>Cost</th>
+    </tr></thead><tbody>`;
+    for (const w of entry.waves) {
+      const wTok = w.tokens || {};
+      const wTotalIn = (wTok.input || 0) + (wTok.cacheRead || 0);
+      let wTokenStr = `↑${formatTokens(wTotalIn)} ↓${formatTokens(wTok.output || 0)}`;
+      const mergeClass = w.mergeStatus === "succeeded" ? "status-succeeded" :
+        w.mergeStatus === "failed" ? "status-failed" : "status-stalled";
+      html += `<tr>
+        <td>Wave ${w.wave}</td>
+        <td>${w.tasks.join(", ")}</td>
+        <td><span class="status-badge ${mergeClass}">${w.mergeStatus}</span></td>
+        <td>${formatDuration(w.durationMs)}</td>
+        <td>${wTokenStr}</td>
+        <td style="color:var(--yellow)">${formatCost(wTok.costUsd || 0)}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  // Task table
+  if (entry.tasks && entry.tasks.length > 0) {
+    html += `<div class="history-section-title">Tasks</div>`;
+    html += `<table class="history-tasks-table"><thead><tr>
+      <th>Task</th><th>Status</th><th>Wave</th><th>Lane</th><th>Duration</th><th>Tokens</th><th>Cost</th><th>Exit</th>
+    </tr></thead><tbody>`;
+    for (const t of entry.tasks) {
+      const tTok = t.tokens || {};
+      const tTotalIn = (tTok.input || 0) + (tTok.cacheRead || 0);
+      let tTokenStr = `↑${formatTokens(tTotalIn)} ↓${formatTokens(tTok.output || 0)}`;
+      const statusCls = `status-${t.status}`;
+      html += `<tr>
+        <td>${escapeHtml(t.taskId)}</td>
+        <td><span class="status-badge ${statusCls}">${t.status}</span></td>
+        <td>W${t.wave}</td>
+        <td>L${t.lane}</td>
+        <td>${formatDuration(t.durationMs)}</td>
+        <td>${tTokenStr}</td>
+        <td style="color:var(--yellow)">${formatCost(tTok.costUsd || 0)}</td>
+        <td style="font-size:0.8rem;color:var(--text-muted)">${t.exitReason ? escapeHtml(t.exitReason) : "—"}</td>
+      </tr>`;
+    }
+    html += `</tbody></table>`;
+  }
+
+  $historyBody.innerHTML = html;
+}
+
+/** Handle dropdown change. */
+$historySelect.addEventListener("change", (e) => {
+  const batchId = e.target.value;
+  if (batchId) {
+    viewHistoryEntry(batchId);
+  } else {
+    // Switched to "History ▾" — go back to live view or latest
+    viewingHistoryId = null;
+    $historyPanel.style.display = "none";
+  }
+});
+
+// ─── Theme Toggle ───────────────────────────────────────────────────────────
+
+const DARK_LOGO = "taskplane-word-white.svg";
+const LIGHT_LOGO = "taskplane-word-color.svg";
+
+function applyTheme(theme) {
+  document.documentElement.setAttribute("data-theme", theme);
+  const logo = document.getElementById("header-logo");
+  const icon = document.getElementById("theme-toggle-icon");
+  if (logo) logo.src = theme === "light" ? LIGHT_LOGO : DARK_LOGO;
+  if (icon) icon.textContent = theme === "dark" ? "☀️" : "🌙";
+}
+
+function loadThemePreference() {
+  fetch("/api/preferences")
+    .then(r => r.ok ? r.json() : { theme: "dark" })
+    .then(prefs => applyTheme(prefs.theme || "dark"))
+    .catch(() => applyTheme("dark"));
+}
+
+function saveThemePreference(theme) {
+  fetch("/api/preferences", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ theme }),
+  }).catch(() => {}); // best-effort
+}
+
+const $themeToggle = document.getElementById("theme-toggle");
+if ($themeToggle) {
+  $themeToggle.addEventListener("click", () => {
+    const current = document.documentElement.getAttribute("data-theme") || "dark";
+    const next = current === "dark" ? "light" : "dark";
+    applyTheme(next);
+    saveThemePreference(next);
+  });
+}
+
+// Load saved preference on startup
+loadThemePreference();
+
+// ─── Boot ───────────────────────────────────────────────────────────────────
+
+connect();
+loadHistoryList();
+
+// One-shot fetch on load (in case SSE is slow to connect)
+fetch("/api/state")
+  .then(r => r.json())
+  .then(render)
+  .catch(() => {});

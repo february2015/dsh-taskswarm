@@ -1,0 +1,139 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Buju Dashboard</title>
+  <link rel="stylesheet" href="style.css">
+
+</head>
+<body>
+  <div class="dashboard" id="app">
+
+    <!-- Header -->
+    <header class="header" id="header">
+      <img src="buju-word.svg" alt="Buju" class="header-logo" id="header-logo">
+      <span class="header-badge badge-batch" id="batch-id">—</span>
+      <span class="header-badge badge-phase" id="batch-phase">—</span>
+      <select class="history-select" id="history-select" title="View past batch runs">
+        <option value="">History ▾</option>
+      </select>
+      <select class="repo-filter-select" id="repo-filter" title="Filter by repository" style="display:none;">
+        <option value="">All repos</option>
+      </select>
+      <div class="header-meta">
+        <span id="last-update">—</span>
+        <button class="theme-toggle" id="theme-toggle" title="Toggle light/dark mode" aria-label="Toggle theme">
+          <span class="theme-toggle-icon" id="theme-toggle-icon">☀️</span>
+        </button>
+        <span class="connection-dot disconnected" id="conn-dot" title="SSE connection"></span>
+      </div>
+    </header>
+
+    <!-- Summary Bar -->
+    <div class="summary-bar" id="summary-bar">
+      <div class="summary-progress">
+        <div class="progress-bar-bg" id="progress-bar-bg">
+          <!-- Wave segments injected by JS -->
+        </div>
+        <span class="summary-pct" id="overall-pct">0%</span>
+      </div>
+      <div class="summary-counts" id="summary-counts"></div>
+      <div class="summary-elapsed" id="summary-elapsed">—</div>
+      <div class="summary-waves" id="summary-waves"></div>
+    </div>
+
+    <!-- Content -->
+    <div class="content" id="content">
+
+      <!-- Batch History Summary (shown when no live batch or viewing history) -->
+      <div class="panel history-panel" id="history-panel" style="display:none;">
+        <div class="panel-header">Batch Summary</div>
+        <div class="panel-body" id="history-body">
+          <div class="empty-state">No batch history</div>
+        </div>
+      </div>
+
+      <!-- Supervisor Panel (hidden when no supervisor data) -->
+      <div class="panel supervisor-panel" id="supervisor-panel" style="display:none;">
+        <div class="panel-header supervisor-panel-header" id="supervisor-panel-toggle">
+          <span>Supervisor</span>
+          <span class="supervisor-status-badge" id="supervisor-status-badge"></span>
+          <button class="supervisor-collapse-btn" id="supervisor-collapse-btn" title="Toggle supervisor panel">▾</button>
+        </div>
+        <div class="panel-body supervisor-panel-body" id="supervisor-panel-body">
+          <!-- Status Section -->
+          <div class="supervisor-section" id="supervisor-status-section"></div>
+          <!-- Conversation Section -->
+          <div class="supervisor-section" id="supervisor-conversation-section"></div>
+          <!-- Actions Timeline Section -->
+          <div class="supervisor-section" id="supervisor-actions-section"></div>
+          <!-- Batch Summary Section -->
+          <div class="supervisor-section" id="supervisor-summary-section"></div>
+        </div>
+      </div>
+
+      <!-- Lanes + Tasks (integrated) -->
+      <div class="panel" id="lanes-tasks-panel">
+        <div class="panel-header">Lanes &amp; Tasks</div>
+        <div class="panel-body" id="lanes-tasks-body"></div>
+      </div>
+
+      <!-- Merge Agents -->
+      <div class="panel" id="merge-panel">
+        <div class="panel-header">Merge Agents</div>
+        <div class="panel-body" id="merge-body">
+          <div class="empty-state">No merge agents active</div>
+        </div>
+      </div>
+
+      <!-- TP-107: Runtime V2 Agents Panel -->
+      <div class="panel" id="agents-panel">
+        <div class="panel-header">Agents</div>
+        <div class="panel-body" id="agents-body">
+          <div class="empty-state">No agent registry data</div>
+        </div>
+      </div>
+
+      <!-- TP-107: Mailbox Messages Panel -->
+      <div class="panel" id="messages-panel">
+        <div class="panel-header">Messages</div>
+        <div class="panel-body" id="messages-body">
+          <div class="empty-state">No messages</div>
+        </div>
+      </div>
+
+      <!-- Viewer Panel: Conversation + STATUS.md (hidden until activated) -->
+      <div class="panel terminal-panel" id="terminal-panel" style="display:none;">
+        <div class="panel-header">
+          <span id="terminal-title">Terminal</span>
+          <div class="terminal-controls">
+            <label class="auto-scroll-label">
+              <input type="checkbox" id="auto-scroll-checkbox">
+              <span id="auto-scroll-text">Follow feed</span>
+            </label>
+            <button class="terminal-close" id="terminal-close" title="Close viewer">✕</button>
+          </div>
+        </div>
+        <div class="panel-body" id="terminal-body"></div>
+      </div>
+
+      <!-- Errors (hidden when empty) -->
+      <div class="panel errors-panel" id="errors-panel" style="display:none;">
+        <div class="panel-header">Errors</div>
+        <div class="panel-body" id="errors-body"></div>
+      </div>
+
+    </div>
+
+    <!-- Footer -->
+    <footer class="footer">
+      <span>Buju Dashboard</span>
+      <span id="footer-info">Connecting…</span>
+    </footer>
+
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
