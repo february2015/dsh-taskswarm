@@ -103,6 +103,8 @@ dsh plugin --profile web add ~/myProject/dsh-buju   # append the dsh-buju bundle
 
 Uninstall: `dsh plugin --profile web remove dsh-buju` (a restart is also required for it to take effect).
 
+> Publishing to npm / version management (maintainers): see `docs/release.md`.
+
 ### 3.2 Rules for Changes to Take Effect (Common Misconceptions)
 
 - `src/` code changes (including supervisor prompts, tool behavior) → require `npm run build` + **restarting

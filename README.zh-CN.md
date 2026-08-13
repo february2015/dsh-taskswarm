@@ -127,6 +127,7 @@ buju/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 commit
 ## 文档
 
 - **[运维手册（Runbook）](docs/runbook.zh-CN.md)** —— 清理残留 / 错误恢复 / 工作抢救的标准作业程序（supervisor / AI 代理必读）
+- **[发布手册（Release）](docs/release.zh-CN.md)** —— npm 发布、版本号管理、2FA bypass token 的坑（维护者用）
 - **[已知问题（Known Issues）](docs/known-issues.zh-CN.md)** —— 已修复问题的根因分析与修复记录
 
 ## 许可与致谢

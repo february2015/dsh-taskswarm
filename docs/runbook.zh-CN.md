@@ -101,6 +101,8 @@ dsh plugin --profile web add ~/myProject/dsh-buju   # 追加 dsh-buju bundle 到
 
 卸载：`dsh plugin --profile web remove dsh-buju`（同样需重启生效）。
 
+> 发布到 npm / 版本号管理（维护者）：见 `docs/release.zh-CN.md`。
+
 ### 3.2 改动生效规则（常见误区）
 
 - `src/` 代码改动（含 supervisor 提示词、工具行为）→ `npm run build` + **重启 dsh web

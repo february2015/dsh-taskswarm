@@ -1,0 +1,86 @@
+# Release Guide (发布手册)
+
+> For **maintainers** — how to publish dsh-buju to the npm registry so others
+> can `dsh plugin add dsh-buju` or `npx buju-dashboard`. Bilingual standard:
+> 中文版见 [release.zh-CN.md](release.zh-CN.md).
+>
+> User-facing install instructions (npm / GitHub / local) live in the README;
+> this guide is about getting a new version out.
+
+## Distribution channels
+
+| Channel | How users install | When |
+|---|---|---|
+| **npm** (primary) | `dsh plugin add dsh-buju` / `npx --package dsh-buju buju-dashboard` | every release |
+| GitHub | `dsh plugin add https://github.com/february2015/dsh-buju.git` | keep in sync (push master) |
+| local / offline | clone or zip + `npm install && npm run build && dsh plugin add <dir>` | development |
+
+## Prerequisites
+
+- An npm account with **publish rights** on `dsh-buju` (unscoped → public by default).
+- A **Granular Access Token** — a classic token will be rejected with
+  `E403 ... Two-factor authentication or granular access token with bypass 2fa
+  enabled is required` when the account has 2FA enabled (it does, by default):
+  - https://www.npmjs.com/settings/<user>/tokens → Generate New Token → **Granular Access Token**
+  - Packages and scopes: `dsh-buju`; Permissions: **Read and write**
+  - **Must check the 2FA bypass option** ("bypass" for publish) — otherwise publishing still fails.
+- Store the token (the published steps below assume it's in `~/.npmrc`):
+
+```bash
+npm config set //registry.npmjs.org/:_authToken <npm_token>
+npm whoami            # should print your npm username
+```
+
+## Release steps
+
+```bash
+# 1. Build & test — the runtime loads lib/, so a fresh build is mandatory
+npm run build
+npm test
+
+# 2. Bump the version in package.json (semver; npm never allows overwriting a published version)
+#    e.g. 0.1.0 → 0.1.1  (or: npm version patch)
+
+# 3. Sanity-check what would ship (files must include lib/, dashboard/, docs/,
+#    templates/, cordis.patch.yml, README.md, README.zh-CN.md)
+npm pack --dry-run
+
+# 4. Publish (public by default for unscoped packages; no extra flag needed)
+npm publish
+
+# 5. Verify
+npm view dsh-buju version        # → 0.1.1
+npm view dsh-buju bin            # → { 'buju-dashboard': 'dashboard/server.mjs' }
+```
+
+## Verifying from the user side
+
+```bash
+dsh plugin --profile web add dsh-buju          # install as plugin (restart dsh web)
+npx --package dsh-buju buju-dashboard --root <repo>   # standalone dashboard CLI
+```
+
+## Versioning rules
+
+- Semantic versioning; during 0.x any minor bump is acceptable for breaking changes.
+- **Every publish must bump the version** — the registry rejects re-publishing an existing version.
+- The published tarball is built from the working tree at publish time; if `lib/`
+  is stale (e.g. you changed `src/`), bump + rebuild + republish.
+
+## Security notes
+
+- Use the least-privilege token: scoped to `dsh-buju` only, Read and write, bypass 2FA.
+- The token is stored in `~/.npmrc` — treat it like a password.
+- If a token leaks or you stop using it: revoke it at
+  https://www.npmjs.com/settings/<user>/tokens and remove it locally with
+  `npm config delete //registry.npmjs.org/:_authToken`.
+
+## Release checklist
+
+- [ ] `npm run build` passes
+- [ ] `npm test` passes (16/16)
+- [ ] version bumped in `package.json`
+- [ ] `npm pack --dry-run` shows the expected files (lib/dashboard/docs/templates/cordis.patch.yml/README\*)
+- [ ] `npm publish` succeeds
+- [ ] `npm view dsh-buju` confirms the new version + bin
+- [ ] master pushed to GitHub (`git push origin master`)
