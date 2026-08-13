@@ -6,18 +6,20 @@
  * @module buju/worker/reviewer
  */
 import { randomUUID } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
 import type { SessionEvent } from '@deepseek-ai/dsh-session'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { mountStandardTools, grantWorkerFullAccess } from './worker-tools.ts'
 
 export interface ReviewerDeps {
   agents: {
     create(options: {
       sessionId: unknown
-      meta: { cwd: string }
+      meta: { cwd: string; origin?: 'subagent' }
       agentOptions: { provider: string; model: string }
       setup?: (agentCtx: unknown) => void
-    }): Promise<{ agent: ReviewerAgent }>
+    }): Promise<{ agent: ReviewerAgent; dispose?(): Promise<void> | void }>
   }
   agentDefaultModel: {
     currentSelection(): { provider: string; model: string }
@@ -73,25 +75,37 @@ export function createReviewerSpawner(
   return async (request) => {
     const selection = deps.agentDefaultModel.currentSelection()
     const model = reviewerModel ?? selection.model
-    const { agent } = await deps.agents.create({
+    const { agent, dispose } = await deps.agents.create({
       sessionId: SessionId(`session-${randomUUID()}`),
-      meta: { cwd: request.worktree },
+      meta: { cwd: request.worktree, origin: 'subagent' },
       agentOptions: { provider: selection.provider, model },
+      setup: (agentCtx) => {
+        mountStandardTools(agentCtx as unknown as Context)
+      },
     })
-    await agent.whenIdle()
-    const prompt = [
-      `You are an independent reviewer for task ${request.taskId}, step ${request.step} (${request.type}).`,
-      `Inspect the worktree at ${request.worktree}: run \`git diff\` against the parent branch to see the changes.`,
-      `Check the changes against the mission, steps, and completion criteria in ${request.taskDir}/PROMPT.md.`,
-      'Respond with a verdict line: PASS or REVISE, followed by a short findings summary.',
-    ].join('\n')
-    agent.followup(createUserMessage({
-      content: [{ type: 'text', text: prompt }],
-      source: { kind: 'user' },
-    }))
-    await agent.whenIdle()
-    const text = lastAssistantText(agent)
-    const verdict: 'PASS' | 'REVISE' = /\bREVISE\b/i.test(text) ? 'REVISE' : 'PASS'
-    return { verdict, summary: text.slice(0, 2000) }
+    try {
+      await agent.whenIdle()
+      const prompt = [
+        `You are an independent reviewer for task ${request.taskId}, step ${request.step} (${request.type}).`,
+        `Inspect the worktree at ${request.worktree}: run \`git diff\` against the parent branch to see the changes.`,
+        `Check the changes against the mission, steps, and completion criteria in ${request.taskDir}/PROMPT.md.`,
+        'Respond with a verdict line: PASS or REVISE, followed by a short findings summary.',
+      ].join('\n')
+      agent.followup(createUserMessage({
+        content: [{ type: 'text', text: prompt }],
+        source: { kind: 'user' },
+      }))
+      await agent.whenIdle()
+      const text = lastAssistantText(agent)
+      const verdict: 'PASS' | 'REVISE' = /\bREVISE\b/i.test(text) ? 'REVISE' : 'PASS'
+      return { verdict, summary: text.slice(0, 2000) }
+    } finally {
+      // Tear the reviewer session down once the verdict is produced.
+      try {
+        await dispose?.()
+      } catch {
+        // disposal failure must not mask the verdict
+      }
+    }
   }
 }

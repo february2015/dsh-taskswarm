@@ -39,6 +39,10 @@
       "types": "./lib/demo.d.ts",
       "default": "./lib/demo.js"
     },
+    "./diag": {
+      "types": "./lib/diag.d.ts",
+      "default": "./lib/diag.js"
+    },
     "./core/*": "./lib/core/*.js",
     "./cordis.patch.yml": "./cordis.patch.yml",
     "./src/*": "./src/*",
@@ -73,6 +77,10 @@
     "@deepseek-ai/dsh-llm": "*",
     "@deepseek-ai/dsh-session": "*",
     "@deepseek-ai/dsh-tools": "*",
+    "@deepseek-ai/dsh-tool-bash": "*",
+    "@deepseek-ai/dsh-tool-fs": "*",
+    "@deepseek-ai/dsh-tool-fs-search": "*",
+    "@deepseek-ai/dsh-tool-str-replace-editor": "*",
     "@deepseek-ai/schemastery": "*"
   },
   "peerDependenciesMeta": {
@@ -85,6 +93,10 @@
     "@deepseek-ai/dsh-llm": { "optional": true },
     "@deepseek-ai/dsh-session": { "optional": true },
     "@deepseek-ai/dsh-tools": { "optional": true },
+    "@deepseek-ai/dsh-tool-bash": { "optional": true },
+    "@deepseek-ai/dsh-tool-fs": { "optional": true },
+    "@deepseek-ai/dsh-tool-fs-search": { "optional": true },
+    "@deepseek-ai/dsh-tool-str-replace-editor": { "optional": true },
     "@deepseek-ai/schemastery": { "optional": true }
   },
   "devDependencies": {

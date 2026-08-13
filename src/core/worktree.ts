@@ -56,8 +56,17 @@ export interface LaneWorktree {
 export function createLaneWorktree(repoRoot: string, paths: WorktreePaths, taskId: string): LaneWorktree | null {
   const branch = `buju/${sanitizeNameComponent(taskId, 48)}`
   const dir = join(paths.worktreesDir, sanitizeNameComponent(taskId, 48))
-  if (existsSync(dir)) return null
-  const result = runGit(['worktree', 'add', '-b', branch, dir], repoRoot)
+  // Leftovers from a killed process or an aborted batch must not block the
+  // next batch: remove a stale worktree dir, and attach an existing branch
+  // instead of `-b` (which fails when the branch already exists).
+  if (existsSync(dir)) {
+    const removed = runGit(['worktree', 'remove', '--force', dir], repoRoot)
+    if (!removed.ok) runGit(['worktree', 'prune'], repoRoot)
+  }
+  const hasBranch = runGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoRoot).ok
+  const result = hasBranch
+    ? runGit(['worktree', 'add', branch, dir], repoRoot)
+    : runGit(['worktree', 'add', '-b', branch, dir], repoRoot)
   if (!result.ok) return null
   return { dir, branch }
 }

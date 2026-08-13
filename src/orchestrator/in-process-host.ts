@@ -6,9 +6,11 @@
  * @module buju/orchestrator/in-process-host
  */
 import { randomUUID } from 'node:crypto'
+import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
 import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { registerLaneTools, buildWorkerMission, type LaneRuntime } from '../worker/lane-tools.ts'
+import { mountStandardTools, grantWorkerFullAccess } from '../worker/worker-tools.ts'
 import { createReviewerSpawner, lastAssistantText, type ReviewerAgent, type ReviewerDeps } from '../worker/reviewer.ts'
 import type { LaneSpec, WorkerHost, WorkerResult } from './worker-host.ts'
 
@@ -35,14 +37,34 @@ export class InProcessWorkerHost implements WorkerHost {
       ...(spec.reviewerModel ? { reviewerModel: spec.reviewerModel } : {}),
       spawnReviewer: createReviewerSpawner(this.deps, spec.reviewerModel),
     }
-    const { agent } = await this.deps.agents.create({
-      sessionId: SessionId(`session-${randomUUID()}`),
-      meta: { cwd: spec.worktree },
-      agentOptions: { provider: selection.provider, model: spec.model ?? selection.model },
-      setup: (agentCtx) => {
-        registerLaneTools(agentCtx as unknown as { tools: { register(def: unknown): unknown } }, lane)
-      },
-    })
+    let agent: ReviewerAgent
+    let dispose: (() => Promise<void> | void) | undefined
+    try {
+      const handle = await this.deps.agents.create({
+        sessionId: SessionId(`session-${randomUUID()}`),
+        // origin 'subagent' keeps worker sessions out of the sidebar's workspace
+        // groups (they are internal agents, not user conversations); dispose()
+        // tears the session down once the lane turn finishes.
+        meta: { cwd: spec.worktree, origin: 'subagent' },
+        agentOptions: { provider: selection.provider, model: spec.model ?? selection.model },
+        setup: (agentCtx) => {
+          // Workers are internal agents: grant them full sandbox access with
+          // approvals off (per-session, via the DSH delegation event mechanism),
+          // then mount the standard tool set when the ambient profile does not
+          // provide it, and finally register the lane bridge tools.
+          grantWorkerFullAccess(agentCtx as unknown as Context)
+          mountStandardTools(agentCtx as unknown as Context)
+          registerLaneTools(agentCtx as unknown as { tools: { register(def: unknown): unknown } }, lane)
+        },
+      })
+      agent = handle.agent
+      dispose = handle.dispose
+    } catch (e) {
+      // Process shutdown (agent factory already unloaded) or transient creation
+      // failure: fail the lane cleanly instead of crashing the batch loop.
+      const message = e instanceof Error ? e.message : String(e)
+      return { exitCode: 1, error: message, text: message }
+    }
     this.running.set(spec.lane, agent)
     try {
       await agent.whenIdle()
@@ -56,6 +78,13 @@ export class InProcessWorkerHost implements WorkerHost {
       return { exitCode: ok ? 0 : 1, text }
     } finally {
       this.running.delete(spec.lane)
+      // Tear the worker session down once its turn finishes so completed
+      // workers do not linger in memory or the sidebar session list.
+      try {
+        await dispose?.()
+      } catch {
+        // disposal failure must not mask the lane result
+      }
     }
   }
 

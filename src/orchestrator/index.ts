@@ -21,12 +21,16 @@
 import { existsSync, mkdirSync } from 'node:fs'
 import { fileURLToPath } from 'node:url'
 import { dirname, join, isAbsolute, resolve } from 'node:path'
+import { spawn, type ChildProcess } from 'node:child_process'
+import { createConnection } from 'node:net'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
-import type { CommandInvocation, CommandResult } from '@deepseek-ai/dsh-commands'
-import { BujuEngine, type EngineConfig } from './engine.ts'
+import type { CommandInvocation, CommandResult, CommandDefinition } from '@deepseek-ai/dsh-commands'
+import { createUserMessage } from '@deepseek-ai/dsh-llm'
+import { BujuEngine, type EngineConfig, type BujuEvent } from './engine.ts'
 import { InProcessWorkerHost } from './in-process-host.ts'
 import { HeadlessWorkerHost, type WorkerHost } from './worker-host.ts'
+import { shouldWake, supervisorEventReport, registerSupervisor, startPeriodicSupervision, estimateEta, type SupervisorAutonomyLevel } from './supervisor.ts'
 import { scanTasks, formatWavePlan } from '../core/discover.ts'
 import { scaffoldTask } from '../core/task.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
@@ -44,6 +48,12 @@ export interface Config {
   host?: 'in-process' | 'headless'
   dshBin?: string
   workerProfile?: string
+  /** Conversational supervisor autonomy (ported from TaskPlane): 'off' | 'interactive' | 'supervised' (default) | 'autonomous'. */
+  supervisorMode?: 'off' | 'interactive' | 'supervised' | 'autonomous'
+  /** 定时检查间隔（毫秒），默认 60000（1 分钟）。只读状态，零成本。 */
+  supervisorCheckIntervalMs?: number
+  /** 距上次 lane 变化超过该时长 → 唤醒"疑似卡住"提醒（毫秒），默认 240000（4 分钟）。 */
+  supervisorStalledMs?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -56,6 +66,9 @@ export const Config: z<Config> = z.object({
   host: z.union([z.const('in-process'), z.const('headless')]).default('in-process'),
   dshBin: z.string(),
   workerProfile: z.string(),
+  supervisorMode: z.union([z.const('off'), z.const('interactive'), z.const('supervised'), z.const('autonomous')]).default('supervised'),
+  supervisorCheckIntervalMs: z.number().default(60_000),
+  supervisorStalledMs: z.number().default(240_000),
 })
 
 interface EngineRef {
@@ -82,9 +95,92 @@ function agentCwd(invocation: CommandInvocation): string | undefined {
   return session?.header?.cwd ?? session?.meta?.cwd
 }
 
+// ── /buju-dashboard（移植自 WEB-006 的抢救实现）────────────────────────────
+const DASHBOARD_SERVER_REL = '../../dashboard/server.mjs'
+const DASHBOARD_DEFAULT_PORT = 8100
+const DASHBOARD_START_TIMEOUT_MS = 5000
+
+/** Probe whether something is already listening on `port` (127.0.0.1). */
+function probePort(port: number): Promise<boolean> {
+  return new Promise((resolve) => {
+    const socket = createConnection({ port, host: '127.0.0.1' })
+    const finish = (open: boolean): void => {
+      try {
+        socket.destroy()
+      } catch {
+        // already closed
+      }
+      resolve(open)
+    }
+    socket.once('connect', () => finish(true))
+    socket.once('error', () => finish(false))
+    socket.setTimeout(600, () => finish(false))
+  })
+}
+
+/**
+ * Wait for the dashboard child to report its URL on stdout
+ * (`Buju Dashboard → http://localhost:<port>`). Rejects when the child exits
+ * early (e.g. explicit --port already in use) or never reports in time.
+ */
+function waitForDashboardUrl(child: ChildProcess, fallbackPort: number, timeoutMs = DASHBOARD_START_TIMEOUT_MS): Promise<string> {
+  return new Promise((resolve, reject) => {
+    let out = ''
+    const timer = setTimeout(() => fail(`dashboard server did not report a port within ${timeoutMs}ms`), timeoutMs)
+    const cleanup = (): void => {
+      clearTimeout(timer)
+      child.stdout?.off('data', onOut)
+      child.stderr?.off('data', onErr)
+      child.off('exit', onExit)
+      child.off('error', onError)
+    }
+    const fail = (message: string): void => {
+      cleanup()
+      reject(new Error(message))
+    }
+    const onOut = (chunk: Buffer): void => {
+      out += chunk.toString()
+      const m = out.match(/http:\/\/localhost:(\d+)/)
+      if (m) {
+        cleanup()
+        resolve(`http://localhost:${m[1]}`)
+      }
+    }
+    const onErr = (chunk: Buffer): void => {
+      out += chunk.toString()
+    }
+    const onExit = (code: number | null, signal: string | null): void => {
+      fail(out.includes('already in use')
+        ? `dashboard server: port ${fallbackPort} is already in use`
+        : `dashboard server exited early (code ${code ?? signal})`)
+    }
+    const onError = (e: Error): void => fail(`dashboard server failed to start: ${e.message}`)
+    child.stdout?.on('data', onOut)
+    child.stderr?.on('data', onErr)
+    child.once('exit', onExit)
+    child.once('error', onError)
+  })
+}
+
 export function apply(ctx: Context, config: Config): void {
   const engines = new Map<string, EngineRef>()
+  const dashboards = new Map<string, { child: ChildProcess; port: number }>()
   const templatesDir = fileURLToPath(new URL('../../templates/tasks/', import.meta.url))
+
+  // 进程关闭（Ctrl+C / 插件卸载）时，先优雅停止所有在跑 batch：abort 会 cancel
+  // 活跃 lanes 并清理 worktree，避免 worker 在 agent 工厂卸载后仍在 spawn
+  // （"no agent factory registered" 竞态）。
+  if (typeof ctx.effect === 'function') {
+    ctx.effect(() => () => {
+      for (const ref of engines.values()) {
+        try {
+          ref.engine.abort()
+        } catch {
+          // shutdown must not throw
+        }
+      }
+    })
+  }
 
   const ensureEngine = (invocation: CommandInvocation): EngineRef | { error: string } => {
     const agentDir = agentCwd(invocation)
@@ -113,7 +209,18 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
-    const engineConfig: EngineConfig = {
+    // Conversational supervisor (ported from TaskPlane): the invoking session
+    // agent becomes the supervisor. The engine emits structured events;
+    // decision-worthy events (started / failed / REVISE / complete / aborted)
+    // wake the agent with a [Buju supervisor] report so it inspects state,
+    // classifies its next action, and acts or asks per its autonomy level.
+    const supervisorMode: SupervisorAutonomyLevel | 'off' = config.supervisorMode ?? 'supervised'
+    const supervisorAgent = (supervisorMode === 'off'
+      ? undefined
+      : invocation.agent as { followup?(message: unknown): void; ctx?: Context } | undefined)
+    const autonomy: SupervisorAutonomyLevel = supervisorMode === 'off' ? 'supervised' : supervisorMode
+
+    const engine = new BujuEngine({
       repoRoot,
       tasksRoot,
       stateRoot,
@@ -121,24 +228,66 @@ export function apply(ctx: Context, config: Config): void {
       ...(config.workerModel ? { workerModel: config.workerModel } : {}),
       ...(config.reviewerModel ? { reviewerModel: config.reviewerModel } : {}),
       includeDoneTasks: config.includeDoneTasks,
-    }
-    const ref: EngineRef = { engine: new BujuEngine(engineConfig), repoRoot, tasksRoot, stateRoot }
+      ...(supervisorAgent?.followup
+        ? {
+            onEvent: (event: BujuEvent): void => {
+              if (!shouldWake(event)) return
+              try {
+                const state = engine.status()
+                supervisorAgent.followup!(createUserMessage({
+                  content: [{ type: 'text', text: supervisorEventReport(event, state) }],
+                  source: { kind: 'user' },
+                }))
+              } catch {
+                // A failing supervisor wake must never break batch execution.
+              }
+            },
+          }
+        : {}),
+    })
+    const ref: EngineRef = { engine, repoRoot, tasksRoot, stateRoot }
     engines.set(repoRoot, ref)
+    if (supervisorAgent?.ctx && supervisorMode !== 'off') {
+      // 定时检查（常驻、默认开）：卡住检测。定时汇报默认关，由 operator 通过
+      // buju_supervisor_report_interval 工具开启（"每隔 X 分钟汇报一次"）。
+      const periodic = startPeriodicSupervision(() => ref, (text) => {
+        if (!supervisorAgent.followup) return
+        try {
+          supervisorAgent.followup(createUserMessage({
+            content: [{ type: 'text', text }],
+            source: { kind: 'user' },
+          }))
+        } catch {
+          // non-fatal
+        }
+      }, {
+        checkIntervalMs: config.supervisorCheckIntervalMs,
+        stalledThresholdMs: config.supervisorStalledMs,
+      })
+      registerSupervisor(supervisorAgent.ctx, () => ref, autonomy, periodic)
+    }
     return ref
   }
 
-  const withEngine = (invocation: CommandInvocation, fn: (ref: EngineRef) => CommandResult): CommandResult => {
+  const withEngine = async (
+    invocation: CommandInvocation,
+    fn: (ref: EngineRef) => CommandResult | Promise<CommandResult>,
+  ): Promise<CommandResult> => {
     const ref = ensureEngine(invocation)
     if ('error' in ref) return err(ref.error)
     try {
-      return fn(ref)
+      return await fn(ref)
     } catch (e) {
       return err(`buju: ${e instanceof Error ? e.message : String(e)}`)
     }
   }
 
-  ctx.commands.register({
-    name: 'orch',
+  // ── Command family: /buju-* primary, /orch-* kept as compatible aliases ──
+  const registerCommand = (names: string[], def: Omit<CommandDefinition, 'name'>): void => {
+    for (const name of names) ctx.commands.register({ ...def, name })
+  }
+
+  registerCommand(['buju', 'orch'], {
     description: 'start a Buju batch: orchestrate tasks in parallel waves (git worktree isolation)',
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
@@ -146,12 +295,11 @@ export function apply(ctx: Context, config: Config): void {
       const handle = ref.engine.run(scope)
       const status = ref.engine.status()
       const waveCount = status?.waves ?? 0
-      return ok(`Batch ${handle.batchId} started: ${status?.lanes.length ?? 0} tasks in ${waveCount} wave(s). Monitor with /orch-status.`)
+      return ok(`Batch ${handle.batchId} started: ${status?.lanes.length ?? 0} tasks in ${waveCount} wave(s). Monitor with /buju-status.`)
     }),
   })
 
-  ctx.commands.register({
-    name: 'orch-plan',
+  registerCommand(['buju-plan', 'orch-plan'], {
     description: 'preview the Buju wave plan and dependency graph without executing',
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
@@ -163,38 +311,33 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  ctx.commands.register({
-    name: 'orch-status',
+  registerCommand(['buju-status', 'orch-status'], {
     description: 'show the current Buju batch and lane progress',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state: BatchState | null = ref.engine.status()
-      return state ? ok(formatBatchStatus(state)) : ok('No Buju batch has been run yet in this repo. Start one with /orch.')
+      return state ? ok(formatBatchStatus(state)) : ok('No Buju batch has been run yet in this repo. Start one with /buju.')
     }),
   })
 
-  ctx.commands.register({
-    name: 'orch-pause',
+  registerCommand(['buju-pause', 'orch-pause'], {
     description: 'pause the Buju batch after the current wave',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.pause() ? ok('Batch paused after the current wave.') : err('No running batch to pause.')),
   })
 
-  ctx.commands.register({
-    name: 'orch-resume',
+  registerCommand(['buju-resume', 'orch-resume'], {
     description: 'resume a paused Buju batch',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.resume() ? ok('Batch resumed.') : err('No paused batch to resume.')),
   })
 
-  ctx.commands.register({
-    name: 'orch-abort',
+  registerCommand(['buju-abort', 'orch-abort'], {
     description: 'abort the Buju batch after the current wave (kills running lanes)',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.abort() ? ok('Batch abort requested.') : err('No running batch to abort.')),
   })
 
-  ctx.commands.register({
-    name: 'orch-deps',
+  registerCommand(['buju-deps', 'orch-deps'], {
     description: 'show the Buju task dependency graph',
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
@@ -204,8 +347,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  ctx.commands.register({
-    name: 'orch-sessions',
+  registerCommand(['buju-sessions', 'orch-sessions'], {
     description: 'list active Buju lanes and their worktrees',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state = ref.engine.status()
@@ -216,12 +358,47 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  ctx.commands.register({
-    name: 'orch-integrate',
+  registerCommand(['buju-integrate', 'orch-integrate'], {
     description: 'merge the buju/orch integration branch into the working branch',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const result = ref.engine.integrate()
       return result.ok ? ok(`Integrated: ${result.message}`) : err(`Integration failed: ${result.message}`)
+    }),
+  })
+
+  registerCommand(['buju-dashboard', 'orch-dashboard'], {
+    description: 'start the Buju web dashboard for this repo (independent local server)',
+    input: { hint: '[--port <number>]' },
+    handler: (invocation) => withEngine(invocation, async (ref) => {
+      const rawPort = Number(invocation.rawInput.trim().match(/--port\s+(\d+)/)?.[1] ?? DASHBOARD_DEFAULT_PORT)
+      const port = Number.isFinite(rawPort) && rawPort >= 0 ? rawPort : DASHBOARD_DEFAULT_PORT
+
+      // 重复调用而自身实例还活着 → 复用
+      const known = dashboards.get(ref.repoRoot)
+      if (known && known.child.exitCode === null) {
+        return ok(`Buju Dashboard already running → http://localhost:${known.port} (repo: ${ref.repoRoot})`)
+      }
+      if (known) dashboards.delete(ref.repoRoot)
+
+      // 端口已被占用（如手动 npm run dashboard 起的）→ 直接报 URL
+      if (await probePort(port)) {
+        return ok(`Buju Dashboard already running on this port → http://localhost:${port} (repo: ${ref.repoRoot})`)
+      }
+
+      const serverPath = fileURLToPath(new URL(DASHBOARD_SERVER_REL, import.meta.url))
+      if (!existsSync(serverPath)) {
+        return err(`未找到 dashboard server：${serverPath}`)
+      }
+      const child = spawn(process.execPath, [serverPath, '--root', ref.repoRoot, '--port', String(port), '--no-open'], {
+        cwd: ref.repoRoot,
+        stdio: ['ignore', 'pipe', 'pipe'],
+      })
+      const url = await waitForDashboardUrl(child, port)
+      // 排空 stdout/stderr，避免管道背压卡住子进程
+      child.stdout?.resume()
+      child.stderr?.resume()
+      dashboards.set(ref.repoRoot, { child, port })
+      return ok(`Buju Dashboard → ${url} (repo: ${ref.repoRoot})`)
     }),
   })
 

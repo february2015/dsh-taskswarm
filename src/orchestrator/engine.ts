@@ -29,6 +29,23 @@ import { runGit } from '../core/git.ts'
 import { SUPERVISOR_SESSION, drainInbox, sessionInboxDir, writeMailboxMessage } from '../core/mailbox.ts'
 import type { WorkerHost, LaneSpec } from './worker-host.ts'
 
+export interface BujuEvent {
+  type: 'batch-started' | 'lane-done' | 'lane-failed' | 'lane-revise' | 'wave-complete' | 'batch-complete' | 'batch-aborted'
+  batchId: string
+  /** Present on lane events. */
+  lane?: number
+  taskId?: string
+  phase?: string
+  error?: string
+  /** Present on wave events. */
+  waveIndex?: number
+  totalWaves?: number
+  /** Present on wave/batch events. */
+  merged?: number
+  failed?: number
+  total?: number
+}
+
 export interface EngineConfig {
   repoRoot: string
   tasksRoot: string
@@ -37,6 +54,8 @@ export interface EngineConfig {
   workerModel?: string
   reviewerModel?: string
   includeDoneTasks?: boolean
+  /** Structured batch-lifecycle events, consumed by the supervisor bridge. */
+  onEvent?: (event: BujuEvent) => void
 }
 
 export interface RunHandle {
@@ -55,6 +74,15 @@ export class BujuEngine {
   private readonly active = new Map<string, RunContext>()
 
   constructor(private readonly config: EngineConfig) {}
+
+  /** Fire a structured lifecycle event through the configured hook (non-fatal). */
+  private emit(event: BujuEvent): void {
+    try {
+      this.config.onEvent?.(event)
+    } catch {
+      // A failing event consumer must never break batch execution.
+    }
+  }
 
   /** Latest durable batch state, or null. */
   status(): BatchState | null {
@@ -109,6 +137,12 @@ export class BujuEngine {
     writeBatchState(state)
     const ctx: RunContext = { batchId, config: this.config, paths, paused: false, aborted: false }
     this.active.set(batchId, ctx)
+    this.emit({
+      type: 'batch-started',
+      batchId,
+      total: selected.length,
+      taskId: scope,
+    })
     void this.execute(ctx, waves, state).finally(() => this.active.delete(batchId))
     return { batchId }
   }
@@ -125,7 +159,7 @@ export class BujuEngine {
       return
     }
 
-    for (const wave of waves.waves) {
+    for (const [waveIndex, wave] of waves.waves.entries()) {
       while (ctx.paused && !ctx.aborted) await sleep(250)
       if (ctx.aborted) {
         state.phase = 'aborted'
@@ -138,11 +172,31 @@ export class BujuEngine {
         if (index >= 0) state.lanes[index] = lane
       }
       writeBatchState(state)
+      // Wave boundary report (supervisor wakes on wave-complete, not lane-done).
+      this.emit({
+        type: 'wave-complete',
+        batchId,
+        waveIndex: waveIndex + 1,
+        totalWaves: waves.waves.length,
+        merged: lanes.filter((l) => l.phase === 'merged').length,
+        failed: lanes.filter((l) => l.phase === 'failed').length,
+        total: lanes.length,
+      })
     }
 
     state.phase = ctx.aborted ? 'aborted' : 'complete'
     state.endedAt = new Date().toISOString()
     writeBatchState(state)
+    const done = state.lanes.filter((l) => l.phase === 'merged').length
+    const failed = state.lanes.filter((l) => l.phase === 'failed').length
+    this.emit({
+      type: state.phase === 'aborted' ? 'batch-aborted' : 'batch-complete',
+      batchId,
+      phase: state.phase,
+      merged: done,
+      failed,
+      total: state.lanes.length,
+    })
     const supervisorInbox = sessionInboxDir(config.stateRoot, batchId, SUPERVISOR_SESSION)
     writeMailboxMessage(supervisorInbox, 'engine', SUPERVISOR_SESSION, 'notify', { batchId, phase: state.phase })
     void drainInbox(supervisorInbox)
@@ -159,7 +213,11 @@ export class BujuEngine {
       startedAt: new Date().toISOString(),
       log: [`starting ${task.id}`],
     }
-    writeBatchState(state)
+    // NOTE: no `writeBatchState(state)` here — `state.lanes` still holds the
+    // planning snapshot for sibling lanes, so a full-state write from a
+    // concurrent runLane clobbers their updateLane() disk writes (KI-003).
+    // Persistence for this lane goes through updateLane() below, which is a
+    // single-lane targeted write and race-free.
 
     ensureStatusFile(task)
     setTaskStatus(task.folder, 'running')
@@ -216,6 +274,18 @@ export class BujuEngine {
     lane.endedAt = new Date().toISOString()
     laneLog(lane, `lane ${lane.phase}`)
     updateLane(state.stateRoot, batchId, lane)
+    this.emit({
+      type: lane.phase === 'merged'
+        ? 'lane-done'
+        : lane.phase === 'review'
+          ? 'lane-revise'
+          : 'lane-failed',
+      batchId,
+      lane: lane.lane,
+      taskId: task.id,
+      phase: lane.phase,
+      ...(lane.error ? { error: lane.error.slice(0, 300) } : {}),
+    })
     return lane
   }
 
