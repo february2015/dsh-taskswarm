@@ -55,16 +55,21 @@
     "cordis.patch.yml",
     "templates",
     "LICENSE",
-    "README.md"
+    "README.md",
+    "README.zh-CN.md"
   ],
   "dsh": {
     "bundle": {
       "patch": "./cordis.patch.yml"
     }
   },
+  "bin": {
+    "buju-dashboard": "./dashboard/server.mjs"
+  },
   "scripts": {
     "build": "tsc -p tsconfig.json",
-    "test": "npm run build && node --test tests/*.spec.mjs"
+    "test": "npm run build && node --test tests/*.spec.mjs",
+    "dashboard": "node dashboard/server.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

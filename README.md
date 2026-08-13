@@ -1,27 +1,30 @@
 # Buju（布局）
 
-**DeepSeek Harness 上的多智能体任务编排插件** —— 把一批任务按依赖排成波次，让多个 AI worker 在相互隔离的环境里并行执行，再自动评审、合并产出。
+**Multi-agent task orchestration for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai).**
 
-> 布局（围棋术语）：落子前先摆全局，再让棋子在各自位置并行推进——正是这个项目做的事：**先规划波次、再并行执行**。
+Buju arranges a batch of tasks into dependency-ordered **waves**, runs multiple AI workers in **parallel lanes** isolated by git worktrees, then automatically reviews and merges their output.
+
+> 布局 (bùjú) is a Go term: before placing a stone, lay out the whole board, then let every stone advance in its own position — exactly what this project does: **plan the waves first, then execute in parallel**.
 
 - **License:** MIT
-- **上游:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi 生态多智能体编排）—— 本项目的原生移植
+- **Upstream:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi ecosystem multi-agent orchestration）— this project is a native port
+- **中文文档:** [README.zh-CN.md](README.zh-CN.md)
 
-## 核心特性
+## Features
 
-- **Waves / Lanes 并行编排** —— 按依赖 DAG 把任务排成波次，每波任务并行执行；依赖关系自动分层
-- **Git worktree 隔离** —— 每个任务（lane）在独立 git worktree 里工作，互不干扰，产物通过 `buju/orch` 集成分支合并
-- **任务包（Task Packets）** —— 每个任务 = `PROMPT.md`（使命/步骤/约束）+ `STATUS.md`（进度），持久记忆，worker 能扛过上下文重置
-- **检查点纪律** —— 步骤边界自动 git commit；worker 崩溃不丢已完成的活
-- **跨模型评审（Reviewer）** —— 独立 reviewer 按任务 `Review Level` 评审产出，PASS 才合并，REVISE 打回修订
-- **文件邮箱（Mailbox）** —— worker ↔ supervisor 异步通信（notify / escalate / request），不依赖共享上下文
-- **对话式 Supervisor** —— 与你共享会话：wave 完成、lane 失败、批次完成自动汇报；可指挥它 start / pause / abort / integrate / 开 dashboard
-- **Web Dashboard** —— 本地实时仪表盘，零依赖 node:http + SSE，多仓库多实例、端口自动避让
-- **崩溃可恢复** —— 磁盘状态持久化 + 检查点 + lane 分支保留，进程被杀/重启后可抢救产物、清理残留、重跑
+- **Waves / Lanes parallel orchestration** — tasks are topologically layered by their dependency DAG into waves; tasks within a wave run concurrently
+- **Git worktree isolation** — every task (lane) works in its own worktree; results are merged into the `buju/orch` integration branch
+- **Task packets** — each task is a `PROMPT.md` (mission / steps / constraints) + `STATUS.md` (progress), giving workers durable memory across context resets
+- **Checkpoint discipline** — automatic git commits at step boundaries; a crashed worker never loses committed work
+- **Cross-model review** — an independent reviewer scores each task per its `Review Level`; PASS merges, REVISE sends it back for revision
+- **File mailbox** — workers and supervisor communicate asynchronously (notify / escalate / request) without shared context
+- **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard)
+- **Web Dashboard** — local realtime dashboard, zero-dependency node:http + SSE, multiple instances with automatic port negotiation
+- **Crash-recoverable** — durable disk state + checkpoints + retained lane branches; after a kill/restart you can salvage work, clean up residue, and re-run
 
-## 快速开始
+## Quick Start
 
-### 1. 安装（三选一）
+### 1. Install (pick one)
 
 ```bash
 # npm registry
@@ -30,99 +33,106 @@ dsh plugin --profile web add dsh-buju
 # GitHub
 dsh plugin --profile web add https://github.com/february2015/dsh-buju.git
 
-# 本地目录（开发/离线）
+# Local directory (development / offline)
 git clone https://github.com/february2015/dsh-buju.git && cd dsh-buju
 npm install && npm run build
 dsh plugin --profile web add $(pwd)
 ```
 
-安装后**重启 dsh web**，插件即生效。
+**Restart dsh web** after installing — the plugin takes effect on boot.
 
-### 2. 初始化示例任务
-
-```
-/buju-init        # 生成两个示例任务包（EXAMPLE-001 / EXAMPLE-002）
-```
-
-### 3. 预览波次计划（不执行）
+### 2. Scaffold example tasks
 
 ```
-/buju-plan all    # 展示任务按依赖排成的波次
+/buju-init        # creates two example task packets (EXAMPLE-001 / EXAMPLE-002)
 ```
 
-### 4. 启动批次
+### 3. Preview the wave plan (no execution)
 
 ```
-/buju all         # 并行执行所有任务；也可以指定任务：/buju EXAMPLE-002
-/buju-status      # 随时查看进度
+/buju-plan all    # shows tasks grouped into waves by dependency
 ```
 
-### 5. 看 Dashboard
+### 4. Start a batch
 
 ```
-/buju-dashboard   # 浏览器打开本地仪表盘，实时看 waves/lanes 进度
+/buju all         # run all tasks in parallel; or target one: /buju EXAMPLE-002
+/buju-status      # watch progress anytime
 ```
 
-## 工作原理
+### 5. Open the Dashboard
 
-Buju 编排 **4 类角色**：
+```bash
+# from a DSH session (supervisor command)
+/buju-dashboard
 
-| 角色 | 职责 |
-|---|---|
-| **Supervisor** | 规划波次、调度 lane、处理事件、与你对话（你发起 `/buju` 的会话即 supervisor） |
-| **Worker** | 每个任务一个 DSH agent，在隔离的 lane worktree 里逐步推进任务包 |
-| **Reviewer** | 独立 agent 评审 worker 产出，给出 PASS / REVISE |
-| **Merger** | lane 完成后自动把产物合并进 `buju/orch` 集成分支 |
+# or standalone CLI — after installing the plugin, the bin is on PATH:
+npx buju-dashboard --root <repo>
 
-**Git 模型：**
-
-```
-buju/orch            ← 集成分支：所有 lane 产物汇总（常驻，勿手动删除）
-buju/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 commit，合并后自动删除）
+# or without installing anything, fetched on the fly (after npm publish):
+npx --package dsh-buju buju-dashboard --root <repo> [--port 8100] [--no-open]
 ```
 
-**持久状态**（`<repo>/.buju/`）：
+## How It Works
+
+Four roles are orchestrated:
+
+| Role           | Responsibility                                                                              |
+| -------------- | ------------------------------------------------------------------------------------------- |
+| **Supervisor** | Plans waves, schedules lanes, handles events, talks to you (the session that ran `/buju`)   |
+| **Worker**     | One DSH agent per task, advancing its task packet step by step in an isolated lane worktree |
+| **Reviewer**   | Independent agent reviewing worker output, emitting PASS / REVISE                           |
+| **Merger**     | Merges finished lane output into the `buju/orch` integration branch                         |
+
+**Git model:**
 
 ```
-.buju/batches/<batchId>.json   # 批次唯一权威状态（phase + lanes）
-.buju/mailbox/<batchId>/       # agent 间消息
-.buju/worktrees/_orch/         # 集成分支 worktree
-.buju/worktrees/<taskId>/      # 各 lane 的隔离 worktree
+buju/orch            ← integration branch: all lane output lands here (persistent — don't delete)
+buju/<taskId>        ← per-lane working branch (holds step checkpoints; removed after merge)
 ```
 
-## 命令参考
+**Durable state** (`<repo>/.buju/`):
 
-| 命令 | 作用 |
-|---|---|
-| `/buju [scope]` | 启动批次（scope: `all` / 任务 ID / 路径） |
-| `/buju-plan [scope]` | 预览波次计划与依赖图（不执行） |
-| `/buju-status` | 查看当前批次 / lane 进度 |
-| `/buju-pause` / `/buju-resume` | 当前波次结束后暂停 / 恢复 |
-| `/buju-abort` | 当前波次结束后中止（并终止运行中 lane） |
-| `/buju-deps [scope]` | 查看依赖图 |
-| `/buju-sessions` | 列出活跃 lane 及其 worktree |
-| `/buju-integrate` | 把 `buju/orch` 合并进当前工作分支 |
-| `/buju-dashboard` | 启动 Web Dashboard |
-| `/buju-init [ID]` | 生成示例任务包 |
+```
+.buju/batches/<batchId>.json   # single source of truth for a batch (phase + lanes)
+.buju/mailbox/<batchId>/       # agent-to-agent messages
+.buju/worktrees/_orch/         # integration worktree
+.buju/worktrees/<taskId>/      # per-lane isolated worktrees
+```
 
-> 兼容别名：`/orch`、`/orch-status` 等 `/orch-*` 命令等价。
+## Command Reference
 
-## 项目状态
+| Command                        | Action                                                |
+| ------------------------------ | ----------------------------------------------------- |
+| `/buju [scope]`                | Start a batch (scope: `all` / task id / path)         |
+| `/buju-plan [scope]`           | Preview wave plan and dependency graph (no execution) |
+| `/buju-status`                 | Show current batch / lane progress                    |
+| `/buju-pause` / `/buju-resume` | Pause after the current wave / resume                 |
+| `/buju-abort`                  | Abort after the current wave (kills running lanes)    |
+| `/buju-deps [scope]`           | Show the dependency graph                             |
+| `/buju-sessions`               | List active lanes and their worktrees                 |
+| `/buju-integrate`              | Merge `buju/orch` into the current working branch     |
+| `/buju-dashboard`              | Start the Web Dashboard                               |
+| `/buju-init [ID]`              | Scaffold example task packets                         |
 
-**开发中（v0.1）** —— 核心引擎与命令层已实现并通过测试（`npm install && npm run build && npm test`，9/9），且已在真实 DSH 进程中真机验证：
+> Compatible aliases: `/orch`, `/orch-status` and other `/orch-*` commands are equivalent.
 
-- ✅ core 单元测试 + 引擎集成测试（并行 wave + worktree 隔离 + orch 合并）
-- ✅ 真实 LLM worker 并行执行（deepseek-v4-flash），检查点提交 + 合并进 `buju/orch`
-- ✅ 对话式 supervisor：事件唤醒 + 定时检查（卡住检测）+ 文字指令控制
-- ✅ Web Dashboard 真机验证（localhost 多实例、端口自动避让）
+## Project Status
 
-## 文档
+**In development (v0.1)** — the core engine and command layer are implemented and tested (`npm install && npm run build && npm test`, 9/9), and verified inside a real DSH process:
 
-- **[运维手册（Runbook）](docs/runbook.md)** —— 清理残留 / 错误恢复 / 工作抢救的标准作业程序（supervisor / AI 代理必读）
-- **[已知问题（Known Issues）](docs/known-issues.md)** —— 已修复问题的根因分析与修复记录
+- ✅ core unit tests + engine integration tests (parallel waves + worktree isolation + orch merge)
+- ✅ real LLM workers running in parallel (deepseek-v4-flash), checkpoint commits + merge into `buju/orch`
+- ✅ conversational supervisor: event wake-ups + periodic stall detection + verbal command control
+- ✅ Web Dashboard verified live (multiple instances, automatic port negotiation)
 
-## 许可与致谢
+## Docs
 
-- **MIT License**，可自由使用、修改、分发
-- 上游 **TaskPlane**（[github.com/HenryLach/taskplane](https://github.com/HenryLach/taskplane)）：波次编排、任务包、mailbox、supervisor 的原始设计，本项目的原生移植
-- 运行环境：[DeepSeek Harness (DSH)](https://github.com/deepseek-ai)
+- **[Runbook (ops)](docs/runbook.md)** — standard operating procedures for cleanup, error recovery, and work salvage (required reading for supervisors / AI agents)
+- **[Known Issues](docs/known-issues.md)** — root-cause analyses and fixes for resolved issues
+
+## License & Credits
+
+- **MIT License** — free to use, modify, and redistribute
+- Upstream **TaskPlane** ([github.com/HenryLach/taskplane](https://github.com/HenryLach/taskplane)): original design of wave orchestration, task packets, mailbox, and supervisor — this project is a native port
+- Runtime: [DeepSeek Harness (DSH)](https://github.com/deepseek-ai)
