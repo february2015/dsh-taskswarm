@@ -1,95 +1,128 @@
 # Buju（布局）
 
-多智能体任务编排插件，原生运行在 **DeepSeek Harness (DSH)** 上。
+**DeepSeek Harness 上的多智能体任务编排插件** —— 把一批任务按依赖排成波次，让多个 AI worker 在相互隔离的环境里并行执行，再自动评审、合并产出。
 
 > 布局（围棋术语）：落子前先摆全局，再让棋子在各自位置并行推进——正是这个项目做的事：**先规划波次、再并行执行**。
 
-- **GitHub:** https://github.com/february2015/dsh-buju.git
-- **上游:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi 生态多智能体编排，MIT License）——本项目的原生移植
 - **License:** MIT
+- **上游:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi 生态多智能体编排）—— 本项目的原生移植
 
-## 这是什么
+## 核心特性
 
-把 TaskPlane（idea → spec → 任务包 → 编排 → 评估）的能力搬进 DSH：
+- **Waves / Lanes 并行编排** —— 按依赖 DAG 把任务排成波次，每波任务并行执行；依赖关系自动分层
+- **Git worktree 隔离** —— 每个任务（lane）在独立 git worktree 里工作，互不干扰，产物通过 `buju/orch` 集成分支合并
+- **任务包（Task Packets）** —— 每个任务 = `PROMPT.md`（使命/步骤/约束）+ `STATUS.md`（进度），持久记忆，worker 能扛过上下文重置
+- **检查点纪律** —— 步骤边界自动 git commit；worker 崩溃不丢已完成的活
+- **跨模型评审（Reviewer）** —— 独立 reviewer 按任务 `Review Level` 评审产出，PASS 才合并，REVISE 打回修订
+- **文件邮箱（Mailbox）** —— worker ↔ supervisor 异步通信（notify / escalate / request），不依赖共享上下文
+- **对话式 Supervisor** —— 与你共享会话：wave 完成、lane 失败、批次完成自动汇报；可指挥它 start / pause / abort / integrate / 开 dashboard
+- **Web Dashboard** —— 本地实时仪表盘，零依赖 node:http + SSE，多仓库多实例、端口自动避让
+- **崩溃可恢复** —— 磁盘状态持久化 + 检查点 + lane 分支保留，进程被杀/重启后可抢救产物、清理残留、重跑
 
-- **任务包**：每个任务 = `PROMPT.md`（使命/步骤/约束）+ `STATUS.md`（进度），持久记忆，worker 能扛过上下文重置
-- **Waves / Lanes**：按依赖 DAG 排成波次，每波的任务在 git worktree 隔离的 lane 里并行执行
-- **4 类角色**：supervisor（/orch 命令 + 引擎）、worker（DSH agent）、reviewer（跨模型评审）、merger（自动并入 orch 分支）
-- **文件邮箱**：agent 间通过 mailbox 异步通信（notify / escalate / request）
-- **检查点纪律**：步骤边界 git commit，worker 崩溃不丢活
-- **状态可见**：`/orch-status` 实时查看 batch / lane 进度（后续可接 Web 仪表盘）
+## 快速开始
 
-## 目录结构
-
-```
-dsh-buju/
-├── src/
-│   ├── core/            # 移植的编排核心（git/naming/mailbox/task/discover/worktree/status）
-│   ├── orchestrator/    # /orch 系列命令 + 波次/泳道引擎 + worker 宿主
-│   └── worker/          # worker bundle：启动器 + runner + 4 个桥接工具
-├── templates/tasks/     # 任务包模板
-├── cordis.patch.yml     # DSH bundle patch（挂载 orchestrator 插件）
-└── tests/               # node:test 集成测试
-```
-
-## 状态
-
-**开发中（v0.1）**——核心引擎与命令层已实现并通过测试，且已在**真实 DSH 进程中真机验证**：
-
-```
-npm install && npm run build && npm test
-# 9/9 通过：core 单元测试 + 引擎集成测试（2 任务并行 + 依赖波次 + worktree 隔离 + orch 合并）+ 插件冒烟测试
-```
-
-| 模块                                                      | 状态                                                                                                     |
-| ------------------------------------------------------- | ------------------------------------------------------------------------------------------------------ |
-| core（git/naming/mailbox/task/discover/worktree/status）  | ✅ 测试通过                                                                                                 |
-| engine（waves/lanes + 状态持久化）                             | ✅ 集成测试通过（并行性已验证）                                                                                       |
-| /buju 命令（10 个，/orch 兼容别名）+ 4 个桥接工具                      | ✅ 注册冒烟测试通过                                                                                             |
-| **真实 DSH 进程验证**（`dsh --profile buju-verify`，沙箱 profile） | ✅ 完整 batch 跑通：/buju-init → /buju-plan → /buju → /buju-status                                           |
-| **真实 LLM worker**                                       | ✅ 2 个 worker 并行执行（deepseek-v4-flash），task_runner 逐步推进 + checkpoint 提交 + merge 进 `buju/orch`，产物文件内容验证通过 |
-| 接入 web profile                                          | ✅ 已装入 bundles（重启 dsh web 后 /buju 在 GUI 会话可用）                                                           |
-| **对话式 supervisor**（TaskPlane 移植）                        | ✅ 事件唤醒（wave/失败/完成）+ 定时检查（卡住检测）+ 定时汇报（按需开启）+ 文字指令控制（start/integrate/dashboard）                          |
-| **Web Dashboard**（TaskPlane 移植）                         | ✅ 真机验证：localhost:8101 HTTP 200，/api/state 正常；多工作区多实例、端口自动避让                                            |
-
-## 安装到 DSH
+### 1. 安装（三选一）
 
 ```bash
-cd ~/myProject/dsh-buju && npm run build
-# 1. orchestrator → web profile（已做；重启 dsh web 生效）
-dsh plugin --profile web add ~/myProject/dsh-buju
-#    ~/.dsh/profiles/web/package.json 的 dsh.profile.bundles 已追加 "dsh-buju"
-# 2. 重启 dsh web 后，会话里：/buju-init → /buju all → /buju-status
+# npm registry
+dsh plugin --profile web add dsh-buju
+
+# GitHub
+dsh plugin --profile web add https://github.com/february2015/dsh-buju.git
+
+# 本地目录（开发/离线）
+git clone https://github.com/february2015/dsh-buju.git && cd dsh-buju
+npm install && npm run build
+dsh plugin --profile web add $(pwd)
 ```
 
-> 默认 `host: in-process`（worker 为进程内 DSH agent，已验证）；`host: headless` 走 `dsh --profile buju-worker` 子进程（worker bundle 已就绪，见 `src/worker/`）。
+安装后**重启 dsh web**，插件即生效。
 
-## Web Dashboard
+### 2. 初始化示例任务
 
-本地实时批次仪表盘（TaskPlane dashboard 移植，零依赖 node:http + SSE）。
-
-```bash
-# 方式 1：npm script
-npm run dashboard -- --root <仓库路径>          # 默认端口 8100
-
-# 方式 2：CLI 入口
-npx buju-dashboard --root <仓库路径> [--port 8101] [--no-open]
-
-# 方式 3：会话内命令（任意工作区）
-/buju-dashboard                                  # 用当前会话 cwd 作为仓库根
-
-# 方式 4：对话式（supervisor 文字指令）
-"帮我开个 dashboard"                             # 由 supervisor 调用 buju_dashboard 工具启动
+```
+/buju-init        # 生成两个示例任务包（EXAMPLE-001 / EXAMPLE-002）
 ```
 
-- **端口**：默认 8100；被占用时自动 +1 探测（最多 20 次，`findPort`），显式 `--port` 则只试指定端口
-- **多工作区**：每个仓库独立实例，端口自动错开（仓库 A→8100，仓库 B→8101…）
-- **实时**：SSE（`/api/stream`）+ 2s 轮询 + `.buju/batches/` 文件变更即时推送
-- **页面**：批次概览（waves/lanes 进度）、lane 详情（任务包 STATUS）、历史批次、主题切换
-- 数据源为 `<repo>/.buju/batches/*.json` 与 `<repo>/tasks/`；无批次时显示空状态
+### 3. 预览波次计划（不执行）
 
-### 与 supervisor 的配合
+```
+/buju-plan all    # 展示任务按依赖排成的波次
+```
 
-- 运行 `/buju`（或 `/orch`）后，会话 agent 成为对话式 supervisor：wave 完成、lane 失败、batch 完成会自动汇报（`[Buju supervisor]` 消息）
-- 定时汇报：说"每隔 5 分钟汇报一次"即可开启；定时检查（卡住检测）默认开启
-- 文字指挥：说"启动 WEB-006"、"开 dashboard"、"跑完 integrate" 由 supervisor 调工具执行
+### 4. 启动批次
+
+```
+/buju all         # 并行执行所有任务；也可以指定任务：/buju EXAMPLE-002
+/buju-status      # 随时查看进度
+```
+
+### 5. 看 Dashboard
+
+```
+/buju-dashboard   # 浏览器打开本地仪表盘，实时看 waves/lanes 进度
+```
+
+## 工作原理
+
+Buju 编排 **4 类角色**：
+
+| 角色 | 职责 |
+|---|---|
+| **Supervisor** | 规划波次、调度 lane、处理事件、与你对话（你发起 `/buju` 的会话即 supervisor） |
+| **Worker** | 每个任务一个 DSH agent，在隔离的 lane worktree 里逐步推进任务包 |
+| **Reviewer** | 独立 agent 评审 worker 产出，给出 PASS / REVISE |
+| **Merger** | lane 完成后自动把产物合并进 `buju/orch` 集成分支 |
+
+**Git 模型：**
+
+```
+buju/orch            ← 集成分支：所有 lane 产物汇总（常驻，勿手动删除）
+buju/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 commit，合并后自动删除）
+```
+
+**持久状态**（`<repo>/.buju/`）：
+
+```
+.buju/batches/<batchId>.json   # 批次唯一权威状态（phase + lanes）
+.buju/mailbox/<batchId>/       # agent 间消息
+.buju/worktrees/_orch/         # 集成分支 worktree
+.buju/worktrees/<taskId>/      # 各 lane 的隔离 worktree
+```
+
+## 命令参考
+
+| 命令 | 作用 |
+|---|---|
+| `/buju [scope]` | 启动批次（scope: `all` / 任务 ID / 路径） |
+| `/buju-plan [scope]` | 预览波次计划与依赖图（不执行） |
+| `/buju-status` | 查看当前批次 / lane 进度 |
+| `/buju-pause` / `/buju-resume` | 当前波次结束后暂停 / 恢复 |
+| `/buju-abort` | 当前波次结束后中止（并终止运行中 lane） |
+| `/buju-deps [scope]` | 查看依赖图 |
+| `/buju-sessions` | 列出活跃 lane 及其 worktree |
+| `/buju-integrate` | 把 `buju/orch` 合并进当前工作分支 |
+| `/buju-dashboard` | 启动 Web Dashboard |
+| `/buju-init [ID]` | 生成示例任务包 |
+
+> 兼容别名：`/orch`、`/orch-status` 等 `/orch-*` 命令等价。
+
+## 项目状态
+
+**开发中（v0.1）** —— 核心引擎与命令层已实现并通过测试（`npm install && npm run build && npm test`，9/9），且已在真实 DSH 进程中真机验证：
+
+- ✅ core 单元测试 + 引擎集成测试（并行 wave + worktree 隔离 + orch 合并）
+- ✅ 真实 LLM worker 并行执行（deepseek-v4-flash），检查点提交 + 合并进 `buju/orch`
+- ✅ 对话式 supervisor：事件唤醒 + 定时检查（卡住检测）+ 文字指令控制
+- ✅ Web Dashboard 真机验证（localhost 多实例、端口自动避让）
+
+## 文档
+
+- **[运维手册（Runbook）](docs/runbook.md)** —— 清理残留 / 错误恢复 / 工作抢救的标准作业程序（supervisor / AI 代理必读）
+- **[已知问题（Known Issues）](docs/known-issues.md)** —— 已修复问题的根因分析与修复记录
+
+## 许可与致谢
+
+- **MIT License**，可自由使用、修改、分发
+- 上游 **TaskPlane**（[github.com/HenryLach/taskplane](https://github.com/HenryLach/taskplane)）：波次编排、任务包、mailbox、supervisor 的原始设计，本项目的原生移植
+- 运行环境：[DeepSeek Harness (DSH)](https://github.com/deepseek-ai)
