@@ -76,6 +76,8 @@ interface EngineRef {
   repoRoot: string
   tasksRoot: string
   stateRoot: string
+  /** 该仓库的定时检查/汇报控制（engine 创建时建立）。 */
+  periodic?: ReturnType<typeof startPeriodicSupervision>
 }
 
 const USAGE = 'Usage: /orch [all|<task-id>|<path>]'
@@ -88,17 +90,51 @@ function err(text: string): CommandResult {
   return { kind: 'error', text }
 }
 
-function agentCwd(invocation: CommandInvocation): string | undefined {
-  const session = (invocation.agent as {
-    session?: { header?: { cwd?: string }; meta?: { cwd?: string } }
-  } | undefined)?.session
-  return session?.header?.cwd ?? session?.meta?.cwd
+interface SessionLike {
+  id?: string
+  header?: { cwd?: string }
+  meta?: { cwd?: string; origin?: string }
+}
+
+interface AgentLike {
+  ctx?: Context
+  session?: SessionLike
+}
+
+function agentCwdOf(agent: AgentLike | undefined, ctx: Context): string | undefined {
+  const session = agent?.session
+  const direct = session?.header?.cwd ?? session?.meta?.cwd
+  if (direct) return direct
+  // 会话恢复后 header/meta 可能不带 cwd：用 workspace 服务反查权威的"会话→工作目录"
+  // 映射（侧边栏分组同源），与 Pi 的"会话即工作目录"模型一致，无需配置默认仓库。
+  const sessionId = session?.id
+  if (!sessionId) return undefined
+  try {
+    const workspaces = (ctx.get('workspace') as { list?(): { path: string; sessionIds: string[] }[] } | undefined)?.list?.() ?? []
+    for (const ws of workspaces) {
+      if (ws.sessionIds.includes(sessionId)) return ws.path
+    }
+  } catch {
+    // workspace 服务不可用时退回 undefined（由调用方兜底）
+  }
+  return undefined
 }
 
 // ── /buju-dashboard（移植自 WEB-006 的抢救实现）────────────────────────────
 const DASHBOARD_SERVER_REL = '../../dashboard/server.mjs'
 const DASHBOARD_DEFAULT_PORT = 8100
 const DASHBOARD_START_TIMEOUT_MS = 5000
+
+/** 从起点向上找最近的 git 仓库根（含 .git 的目录）；找不到返回 undefined。 */
+function nearestGitRoot(start: string): string | undefined {
+  let dir = resolve(start)
+  for (;;) {
+    if (existsSync(join(dir, '.git'))) return dir
+    const parent = dirname(dir)
+    if (parent === dir) return undefined
+    dir = parent
+  }
+}
 
 /** Probe whether something is already listening on `port` (127.0.0.1). */
 function probePort(port: number): Promise<boolean> {
@@ -182,13 +218,34 @@ export function apply(ctx: Context, config: Config): void {
     })
   }
 
-  const ensureEngine = (invocation: CommandInvocation): EngineRef | { error: string } => {
-    const agentDir = agentCwd(invocation)
+  // 会话一出现就自动挂 supervisor 工具（对齐 Pi：agent 天生具备能力，无需先发命令）。
+  const tryRegisterSupervisorFor = (agent: AgentLike | undefined): void => {
+    if (config.supervisorMode === 'off') return
+    if (!agent?.ctx || !agent.session) return
+    if (agent.session.meta?.origin === 'subagent') return // worker/reviewer 不挂 supervisor 工具
+    try {
+      const ref = ensureEngineForAgent(agent)
+      if ('error' in ref) return
+      const autonomy: SupervisorAutonomyLevel = config.supervisorMode ?? 'supervised'
+      registerSupervisor(agent.ctx, () => ref, autonomy, ref.periodic)
+    } catch {
+      // 非致命：工具挂载失败不影响会话
+    }
+  }
+  try {
+    const onAgentCreated = (payload: { agent: AgentLike }): void => tryRegisterSupervisorFor(payload.agent)
+    ctx.on('agent/created' as unknown as keyof Context['on'], onAgentCreated as never)
+  } catch {
+    // 事件通道不可用时退回命令时注册
+  }
+
+  const ensureEngineForAgent = (agent: AgentLike | undefined): EngineRef | { error: string } => {
+    const agentDir = agentCwdOf(agent, ctx)
     const repoRoot = config.repoRoot
       ? resolve(config.repoRoot)
       : agentDir
         ? resolve(agentDir)
-        : process.cwd()
+        : nearestGitRoot(process.cwd()) ?? process.cwd()
     const cached = engines.get(repoRoot)
     if (cached) return cached
 
@@ -209,15 +266,15 @@ export function apply(ctx: Context, config: Config): void {
       })
     }
 
-    // Conversational supervisor (ported from TaskPlane): the invoking session
-    // agent becomes the supervisor. The engine emits structured events;
+    // Conversational supervisor (ported from TaskPlane): the session agent
+    // becomes the supervisor. The engine emits structured events;
     // decision-worthy events (started / failed / REVISE / complete / aborted)
     // wake the agent with a [Buju supervisor] report so it inspects state,
     // classifies its next action, and acts or asks per its autonomy level.
     const supervisorMode: SupervisorAutonomyLevel | 'off' = config.supervisorMode ?? 'supervised'
     const supervisorAgent = (supervisorMode === 'off'
       ? undefined
-      : invocation.agent as { followup?(message: unknown): void; ctx?: Context } | undefined)
+      : agent as { followup?(message: unknown): void; ctx?: Context } | undefined)
     const autonomy: SupervisorAutonomyLevel = supervisorMode === 'off' ? 'supervised' : supervisorMode
 
     const engine = new BujuEngine({
@@ -230,11 +287,14 @@ export function apply(ctx: Context, config: Config): void {
       includeDoneTasks: config.includeDoneTasks,
       ...(supervisorAgent?.followup
         ? {
-            onEvent: (event: BujuEvent): void => {
+            onEvent: (event: BujuEvent, owner?: unknown): void => {
               if (!shouldWake(event)) return
+              // 事件只回发给发起该 batch 的会话（owner），避免共享 engine 时跨会话串消息。
+              const target = (owner ?? supervisorAgent) as { followup?(m: unknown): void } | undefined
+              if (!target?.followup) return
               try {
                 const state = engine.status()
-                supervisorAgent.followup!(createUserMessage({
+                target.followup(createUserMessage({
                   content: [{ type: 'text', text: supervisorEventReport(event, state) }],
                   source: { kind: 'user' },
                 }))
@@ -245,12 +305,11 @@ export function apply(ctx: Context, config: Config): void {
           }
         : {}),
     })
-    const ref: EngineRef = { engine, repoRoot, tasksRoot, stateRoot }
-    engines.set(repoRoot, ref)
-    if (supervisorAgent?.ctx && supervisorMode !== 'off') {
+    let periodic: EngineRef['periodic']
+    if (supervisorAgent?.followup && supervisorMode !== 'off') {
       // 定时检查（常驻、默认开）：卡住检测。定时汇报默认关，由 operator 通过
       // buju_supervisor_report_interval 工具开启（"每隔 X 分钟汇报一次"）。
-      const periodic = startPeriodicSupervision(() => ref, (text) => {
+      periodic = startPeriodicSupervision(() => ref, (text) => {
         if (!supervisorAgent.followup) return
         try {
           supervisorAgent.followup(createUserMessage({
@@ -264,10 +323,14 @@ export function apply(ctx: Context, config: Config): void {
         checkIntervalMs: config.supervisorCheckIntervalMs,
         stalledThresholdMs: config.supervisorStalledMs,
       })
-      registerSupervisor(supervisorAgent.ctx, () => ref, autonomy, periodic)
     }
+    const ref: EngineRef = { engine, repoRoot, tasksRoot, stateRoot, periodic }
+    engines.set(repoRoot, ref)
     return ref
   }
+
+  const ensureEngine = (invocation: CommandInvocation): EngineRef | { error: string } =>
+    ensureEngineForAgent(invocation.agent as AgentLike)
 
   const withEngine = async (
     invocation: CommandInvocation,
@@ -292,7 +355,7 @@ export function apply(ctx: Context, config: Config): void {
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
       const scope = invocation.rawInput.trim() || 'all'
-      const handle = ref.engine.run(scope)
+      const handle = ref.engine.run(scope, invocation.agent)
       const status = ref.engine.status()
       const waveCount = status?.waves ?? 0
       return ok(`Batch ${handle.batchId} started: ${status?.lanes.length ?? 0} tasks in ${waveCount} wave(s). Monitor with /buju-status.`)

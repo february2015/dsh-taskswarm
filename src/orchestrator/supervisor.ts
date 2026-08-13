@@ -33,6 +33,7 @@ import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { BujuEvent, BujuEngine } from './engine.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
+import { formatWavePlan } from '../core/discover.ts'
 
 /**
  * 粗估批次剩余时长。基于已完成 lane 的平均耗时 × 剩余 lane 数 ÷ 当前并行度。
@@ -159,6 +160,7 @@ export function buildSupervisorSystemPrompt(
 2. 分类动作：diagnostic（只读查证，永远可做）/ tier0_known（resume、pause、清锁等已知恢复）/ destructive（abort、integrate、改状态）；
 3. 按自主度执行：${autonomyRule(autonomy)}
 4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
+5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.md，处理前先读它。
 
 ${ctx}
 
@@ -241,6 +243,8 @@ export function registerSupervisor(
   }
   const refOf = (): SupervisorEngineRef | { error: string } | undefined => getRef()
   const uninitialized = { ok: false, text: 'Buju 引擎未初始化（先运行 /orch）' } as const
+  // 注册该工具的会话 agent：作为 batch owner，让事件只回发到本会话（避免跨会话串消息）。
+  const toolOwner = (agentCtx as unknown as { agent?: unknown }).agent
 
   register(defineTool({
     name: 'buju_supervisor_status',
@@ -272,8 +276,8 @@ export function registerSupervisor(
       action: {
         type: 'string',
         required: true,
-        enum: ['status', 'start', 'integrate', 'resume', 'pause', 'abort'],
-        description: '要执行的控制动作（start 用 scope 指定任务，如 WEB-006 / all）。',
+        enum: ['status', 'plan', 'start', 'integrate', 'resume', 'pause', 'abort'],
+        description: '要执行的控制动作（plan=展示波次计划；start 用 scope 指定任务，如 WEB-006 / all；空项目会自动初始化示例任务）。',
       },
       scope: { type: 'string', description: 'start 动作的任务 scope（任务 ID / all / 路径），默认 all。' },
     },
@@ -298,6 +302,16 @@ export function registerSupervisor(
           const s = engine.status()
           return { ok: true, text: s ? formatBatchStatus(s) : 'No Buju batch yet.' }
         }
+        case 'plan': {
+          const scope = (args.scope as string | undefined)?.trim() || 'all'
+          const { waves, count } = engine.plan(scope)
+          return {
+            ok: true,
+            text: count === 0
+              ? `No tasks found under ${ref.tasksRoot}. 说需求让我先分析并生成任务包，或 start 会自动初始化示例任务。`
+              : `${count} 个任务 / ${waves.waves.length} 个波次：\n${formatWavePlan(waves)}`,
+          }
+        }
         case 'start': {
           const running = engine.status()
           if (running && (running.phase === 'running' || running.phase === 'planning')) {
@@ -305,7 +319,7 @@ export function registerSupervisor(
           }
           const scope = (args.scope as string | undefined)?.trim() || 'all'
           try {
-            const handle = engine.run(scope)
+            const handle = engine.run(scope, toolOwner)
             return { ok: true, text: `Batch ${handle.batchId} started (scope: ${scope})。` }
           } catch (e) {
             return { ok: false, text: e instanceof Error ? e.message : String(e) }

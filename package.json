@@ -50,6 +50,8 @@
   },
   "files": [
     "lib",
+    "dashboard",
+    "docs",
     "cordis.patch.yml",
     "templates",
     "LICENSE",

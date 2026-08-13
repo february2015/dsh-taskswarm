@@ -13,10 +13,11 @@
  * @module buju/orchestrator/engine
  */
 import { randomUUID } from 'node:crypto'
-import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { fileURLToPath } from 'node:url'
 import { scanTasks, resolveScope, buildWaves, type WavePlan } from '../core/discover.ts'
-import { ensureStatusFile, setTaskStatus, markTaskDone, parseStatusFile, appendExecutionLog } from '../core/task.ts'
+import { ensureStatusFile, setTaskStatus, markTaskDone, parseStatusFile, appendExecutionLog, scaffoldTask } from '../core/task.ts'
 import {
   ensureOrchWorktree, createLaneWorktree, checkpointCommit, mergeLane,
   worktreePaths, removeAllLaneWorktrees, type WorktreePaths,
@@ -54,8 +55,8 @@ export interface EngineConfig {
   workerModel?: string
   reviewerModel?: string
   includeDoneTasks?: boolean
-  /** Structured batch-lifecycle events, consumed by the supervisor bridge. */
-  onEvent?: (event: BujuEvent) => void
+  /** Structured batch-lifecycle events + the owning session agent (who started the batch). */
+  onEvent?: (event: BujuEvent, owner?: unknown) => void
 }
 
 export interface RunHandle {
@@ -72,13 +73,15 @@ interface RunContext {
 
 export class BujuEngine {
   private readonly active = new Map<string, RunContext>()
+  /** batchId → 发起该 batch 的会话 agent（事件只回发给它，避免跨会话串消息）。 */
+  private readonly batchOwners = new Map<string, unknown>()
 
   constructor(private readonly config: EngineConfig) {}
 
   /** Fire a structured lifecycle event through the configured hook (non-fatal). */
   private emit(event: BujuEvent): void {
     try {
-      this.config.onEvent?.(event)
+      this.config.onEvent?.(event, this.batchOwners.get(event.batchId))
     } catch {
       // A failing event consumer must never break batch execution.
     }
@@ -107,14 +110,34 @@ export class BujuEngine {
   }
 
   /**
+   * 自动初始化兜底：任务包为空（all/空 scope）时，从包内模板 scaffold 两个示例任务，
+   * 让"启动"永不因空项目失败。用户无需知道"初始化"这一内部动作。
+   * @returns 本次实际新建的任务数。
+   */
+  private autoInitIfEmpty(scope: string): number {
+    const trimmed = (scope || 'all').trim()
+    if (trimmed !== '' && trimmed !== 'all') return 0 // 显式 scope 不做自动初始化
+    if (scanTasks(this.config.tasksRoot, true).length > 0) return 0 // 已有任务包
+    const templatesDir = fileURLToPath(new URL('../../templates/tasks/', import.meta.url))
+    mkdirSync(this.config.tasksRoot, { recursive: true })
+    const create = (templateName: string, id: string, slug: string): string | null =>
+      scaffoldTask(this.config.tasksRoot, join(templatesDir, templateName), id, slug)
+    const a = create('EXAMPLE-001-hello-world', 'EXAMPLE-001', 'hello-world')
+    const b = create('EXAMPLE-002-parallel-smoke', 'EXAMPLE-002', 'parallel-smoke')
+    return [a, b].filter(Boolean).length
+  }
+
+  /**
    * Run a batch. Returns immediately with a batch id; execution continues in
    * the background. Monitor via status().
    */
-  run(scope: string): RunHandle {
+  run(scope: string, owner?: unknown): RunHandle {
+    const initialized = this.autoInitIfEmpty(scope)
     const selected = this.select(scope)
     if (selected.length === 0) throw new Error('no tasks match the requested scope')
     const waves = buildWaves(selected.map((t) => t.task))
     const batchId = `b-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`
+    this.batchOwners.set(batchId, owner)
     const paths = worktreePaths(this.config.repoRoot, this.config.stateRoot)
     const state: BatchState = {
       id: batchId,
