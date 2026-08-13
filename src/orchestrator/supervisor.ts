@@ -34,25 +34,30 @@ import { fileURLToPath } from 'node:url'
 import type { BujuEvent, BujuEngine } from './engine.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
 import { formatWavePlan } from '../core/discover.ts'
+import { messages, detectLocaleFromSession, type Locale, type LocaleState } from './i18n.ts'
+import { writeSetting, removeSetting, repoConfigPath } from './settings.ts'
 
 /**
  * 粗估批次剩余时长。基于已完成 lane 的平均耗时 × 剩余 lane 数 ÷ 当前并行度。
  * 无已完成 lane 时返回"估算中"。纯启发式，供 supervisor 汇报 ETA 用。
+ * 文案随 locale 双语。
  */
-export function estimateEta(state: BatchState): string {
+export function estimateEta(state: BatchState, locale: Locale): string {
+  const m = messages(locale)
   const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped')
   const remaining = state.lanes.filter((l) => l.phase === 'pending' || l.phase === 'running' || l.phase === 'review')
-  if (remaining.length === 0) return '已完成'
+  if (remaining.length === 0) return m.etaDone
   const durations = done
     .map((l) => (l.endedAt && l.startedAt ? Date.parse(l.endedAt) - Date.parse(l.startedAt) : NaN))
     .filter((d) => Number.isFinite(d) && d > 0)
-  if (durations.length === 0) return '估算中（尚无已完成 lane）'
+  if (durations.length === 0) return m.etaEstimating
   const avgMs = durations.reduce((a, b) => a + b, 0) / durations.length
   const parallel = Math.max(1, state.lanes.filter((l) => l.phase === 'running').length)
   const etaMs = (remaining.length * avgMs) / parallel
   const mins = Math.max(1, Math.round(etaMs / 60_000))
-  const base = durations.length === 1 ? '已完成 1 个 lane 用时' : `已完成 ${durations.length} 个 lane 平均用时`
-  return `约 ${mins} 分钟（${base} ${Math.round(avgMs / 1000)}s × ${remaining.length} 个剩余 lane ÷ 并行度 ${parallel}）`
+  const avgSec = Math.round(avgMs / 1000)
+  const base = durations.length === 1 ? m.etaBaseOne(avgSec) : m.etaBaseMany(durations.length, avgSec)
+  return m.etaFmt(mins, base, avgSec, remaining.length, parallel)
 }
 
 /** Supervisor autonomy levels (ported from TaskPlane `SupervisorAutonomyLevel`). */
@@ -68,6 +73,8 @@ export interface SupervisorEngineRef {
   repoRoot: string
   tasksRoot: string
   stateRoot: string
+  /** 会话语言状态（可变；supervisor 工具可文字切换并持久化到 config.json）。 */
+  locale: LocaleState
 }
 
 /**
@@ -127,8 +134,18 @@ function autonomyDescription(autonomy: SupervisorAutonomyLevel): string {
   }
 }
 
-/** 自主度一句话规则（供精简提示词复用）。 */
-export function autonomyRule(autonomy: SupervisorAutonomyLevel): string {
+/** 自主度一句话规则（供精简提示词复用）。双语。 */
+export function autonomyRule(autonomy: SupervisorAutonomyLevel, locale: Locale): string {
+  if (locale === 'en') {
+    switch (autonomy) {
+      case 'interactive':
+        return 'ask the operator before any non-diagnostic action.'
+      case 'autonomous':
+        return 'act on all actions yourself; report in one sentence afterwards.'
+      default:
+        return 'tier0_known runs automatically; destructive actions require a one-line confirmation from the operator first.'
+    }
+  }
   switch (autonomy) {
     case 'interactive':
       return '非 diagnostic 动作一律先征求确认。'
@@ -142,25 +159,40 @@ export function autonomyRule(autonomy: SupervisorAutonomyLevel): string {
 /**
  * Supervisor system prompt — 精简版（结构源自 TaskPlane supervisor.ts:2335，
  * 已大幅压缩以降低每次唤醒的 token 成本）。批上下文在注册时填充；
- * 唤醒消息携带更新状态。
+ * 唤醒消息携带更新状态。文案随 locale 双语。
  */
 export function buildSupervisorSystemPrompt(
   autonomy: SupervisorAutonomyLevel,
   context: { batchId?: string; phase?: string; progress?: string; stateRoot?: string },
+  locale: Locale = 'zh-CN',
 ): string {
   const ctx = [
     `- **Batch:** ${context.batchId ?? '—'} | **Phase:** ${context.phase ?? 'idle'}`,
     context.progress ? `- **Progress:** ${context.progress}` : '',
     `- **State root:** ${context.stateRoot ?? '.buju/'}`,
   ].filter(Boolean).join('\n')
+  if (locale === 'en') {
+    return `# Buju Supervisor
+
+You are the batch supervisor, sharing this session with the operator (activated after /buju starts a batch). On a [Buju supervisor] event:
+1. Verify state with buju_supervisor_status;
+2. Classify actions: diagnostic (read-only checks, always allowed) / tier0_known (resume, pause, clearing locks, known recoveries) / destructive (abort, integrate, state changes);
+3. Act per autonomy: ${autonomyRule(autonomy, 'en')}
+4. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
+5. Standard procedures for cleanup / error recovery / work salvage are in the repo's docs/runbook.md — read it before handling.
+
+${ctx}
+
+Normal user conversation is unaffected.`
+  }
   return `# Buju Supervisor
 
 你是 batch supervisor，与 operator 共享此会话（/buju 启动批次后激活）。收到 [Buju supervisor] 事件后：
 1. 用 buju_supervisor_status 查证状态；
 2. 分类动作：diagnostic（只读查证，永远可做）/ tier0_known（resume、pause、清锁等已知恢复）/ destructive（abort、integrate、改状态）；
-3. 按自主度执行：${autonomyRule(autonomy)}
+3. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
 4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
-5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.md，处理前先读它。
+5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.zh-CN.md，处理前先读它。
 
 ${ctx}
 
@@ -172,33 +204,35 @@ export function shouldWake(event: BujuEvent): boolean {
   return event.type !== 'lane-done'
 }
 
-/** One-line event headline, shown first in the wake message. */
-export function eventHeadline(event: BujuEvent): string {
+/** One-line event headline, shown first in the wake message. 双语。 */
+export function eventHeadline(event: BujuEvent, locale: Locale): string {
+  const m = messages(locale)
   switch (event.type) {
     case 'batch-started':
-      return `[Buju supervisor] Batch ${event.batchId} 已启动（${event.total ?? '?'} 个任务）`
+      return m.batchStarted(event.batchId, event.total ?? 0)
     case 'lane-failed':
-      return `[Buju supervisor] ⚠️ lane ${event.lane} ${event.taskId} 失败${event.error ? `：${event.error}` : ''}`
+      return m.laneFailed(event.lane ?? 0, event.taskId ?? '', event.error)
     case 'lane-revise':
-      return `[Buju supervisor] 🟡 lane ${event.lane} ${event.taskId} 待修订（reviewer REVISE）`
+      return m.laneRevise(event.lane ?? 0, event.taskId ?? '')
     case 'wave-complete':
-      return `[Buju supervisor] 🌊 Wave ${event.waveIndex ?? '?'}/${event.totalWaves ?? '?'} 完成：${event.merged ?? 0} 成功 / ${event.failed ?? 0} 失败`
+      return m.waveComplete(event.waveIndex ?? 0, event.totalWaves ?? 0, event.merged ?? 0, event.failed ?? 0)
     case 'batch-complete':
-      return `[Buju supervisor] ✅ Batch ${event.batchId} 完成：${event.merged ?? 0}/${event.total ?? 0} 成功，${event.failed ?? 0} 失败`
+      return m.batchComplete(event.batchId, event.merged ?? 0, event.total ?? 0, event.failed ?? 0)
     case 'batch-aborted':
-      return `[Buju supervisor] ⛔ Batch ${event.batchId} 已中止`
+      return m.batchAborted(event.batchId)
     default:
       return `[Buju supervisor] ${String(event.type)}`
   }
 }
 
-/** Wake message handed to the session agent（精简：指引已由系统提示承载；状态用精简渲染+ETA）。 */
-export function supervisorEventReport(event: BujuEvent, state: BatchState | null): string {
+/** Wake message handed to the session agent（指引已由系统提示承载；状态用精简渲染+ETA）。 */
+export function supervisorEventReport(event: BujuEvent, state: BatchState | null, locale: Locale): string {
+  const m = messages(locale)
   return [
-    eventHeadline(event),
+    eventHeadline(event, locale),
     '',
-    state ? compactBatchStatus(state) : '(no batch state)',
-    state ? `\n预计剩余：${estimateEta(state)}` : '',
+    state ? compactBatchStatus(state) : m.noBatchState,
+    state ? `\n${m.etaLabel}${estimateEta(state, locale)}` : '',
   ].join('\n')
 }
 
@@ -222,16 +256,28 @@ export function registerSupervisor(
   autonomy: SupervisorAutonomyLevel,
   periodic?: PeriodicControl,
 ): void {
+  // ── supervisor 提示词段：可热替换（dispose 旧段后按当前语言重注册）──
+  let systemPromptService: { section?(opts: { name: string; order: number; text: string }): (() => void) | undefined } | undefined
   try {
-    const systemPrompt = agentCtx.get('systemPrompt') as { section?(opts: { name: string; order: number; text: string }): unknown } | undefined
-    systemPrompt?.section?.({
-      name: 'buju:supervisor',
-      order: 90,
-      text: buildSupervisorSystemPrompt(autonomy, {}),
-    })
+    systemPromptService = agentCtx.get('systemPrompt') as typeof systemPromptService
   } catch {
     // non-fatal
   }
+  let disposePrompt: (() => void) | undefined
+  const registerPrompt = (promptLocale: Locale): void => {
+    try {
+      disposePrompt?.()
+      disposePrompt = systemPromptService?.section?.({
+        name: 'buju:supervisor',
+        order: 90,
+        text: buildSupervisorSystemPrompt(autonomy, {}, promptLocale),
+      }) ?? undefined
+    } catch {
+      disposePrompt = undefined
+    }
+  }
+  const ref = getRef()
+  registerPrompt(ref && 'locale' in ref ? (ref as SupervisorEngineRef).locale.value : 'zh-CN')
   const tools = agentCtx.get('tools') as { register(def: unknown): unknown } | undefined
   if (!tools) return
   const register = (def: unknown): void => {
@@ -245,6 +291,7 @@ export function registerSupervisor(
   const uninitialized = { ok: false, text: 'Buju 引擎未初始化（先运行 /orch）' } as const
   // 注册该工具的会话 agent：作为 batch owner，让事件只回发到本会话（避免跨会话串消息）。
   const toolOwner = (agentCtx as unknown as { agent?: unknown }).agent
+  const toolSessionId = (agentCtx as unknown as { agent?: { session?: { id?: string } } }).agent?.session?.id
 
   register(defineTool({
     name: 'buju_supervisor_status',
@@ -347,10 +394,54 @@ export function registerSupervisor(
     },
   }))
 
+  // ── buju_supervisor_locale：文字切换 supervisor 语言（写入 .buju/config.json）──
+  register(defineTool({
+    name: 'buju_supervisor_locale',
+    description: 'Buju supervisor 语言：查询/切换 supervisor 通知与提示词语言（zh-CN / en / auto 按会话自动检测）。operator 说"用英文汇报"/"用中文"等时调用；设置写入 .buju/config.json 持久化。',
+    parameters: {
+      locale: {
+        type: 'string',
+        enum: ['zh-CN', 'en', 'auto'],
+        description: '目标语言：zh-CN 中文 / en 英文 / auto 恢复为按会话语言自动检测。不传 = 查询当前。',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          text: { type: 'string', required: true },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args) {
+      const ref = refOf()
+      if (!ref || 'error' in ref) return uninitialized
+      const m = messages(ref.locale.value)
+      const target = args.locale as 'zh-CN' | 'en' | 'auto' | undefined
+      if (!target) {
+        return { ok: true, text: m.localeCurrent(ref.locale.value) }
+      }
+      const resolved: Locale = target === 'auto'
+        ? detectLocaleFromSession(agentCtx.get('sessions'), toolSessionId)
+        : target
+      ref.locale.value = resolved
+      if (target === 'auto') {
+        removeSetting(ref.stateRoot, 'locale')
+      } else {
+        writeSetting(ref.stateRoot, 'locale', resolved)
+      }
+      registerPrompt(resolved)
+      return { ok: true, text: messages(resolved).localeSwitchedTo(resolved, repoConfigPath(ref.stateRoot)) }
+    },
+  }))
+
   if (periodic) {
     register(defineTool({
       name: 'buju_supervisor_report_interval',
-      description: 'Buju supervisor 定时汇报：设置每隔 N 分钟汇报一次批次进度（minutes=0 关闭）。operator 要求"每隔 X 分钟汇报一次"时调用；不传参数则查询当前设置。',
+      description: 'Buju supervisor 定时汇报：设置每隔 N 分钟汇报一次批次进度（minutes=0 关闭）。operator 要求"每隔 X 分钟汇报一次"时调用；不传参数则查询当前设置。设置写入 .buju/config.json 持久化。',
       parameters: {
         minutes: { type: 'integer', description: '汇报间隔（分钟）。0 = 关闭定时汇报；不传 = 查询当前设置。' },
       },
@@ -366,10 +457,17 @@ export function registerSupervisor(
         render: (_args, value) => [{ type: 'text', text: value.text }],
       },
       async execute(args) {
+        const ref = refOf()
+        if (!ref || 'error' in ref) return uninitialized
         if (args.minutes === undefined) {
           return { ok: true, text: `当前定时汇报间隔：${periodic.getReportInterval()} 分钟（0 = 关闭）` }
         }
-        return { ok: true, text: periodic.setReportInterval(args.minutes as number) }
+        const minutes = args.minutes as number
+        const text = periodic.setReportInterval(minutes)
+        // 持久化到仓库配置：跨重启生效（0 时移除键，回到默认关闭）
+        if (minutes === 0) removeSetting(ref.stateRoot, 'reportIntervalMinutes')
+        else writeSetting(ref.stateRoot, 'reportIntervalMinutes', minutes)
+        return { ok: true, text: text }
       },
     }))
   }
@@ -461,6 +559,8 @@ export interface PeriodicSupervisionOptions {
   checkIntervalMs?: number
   /** 距上次 lane 状态变化超过该时长仍无动静 → 唤醒一次"疑似卡住"提醒（默认 4 分钟）。 */
   stalledThresholdMs?: number
+  /** 初始定时汇报间隔（分钟），来自 .buju/config.json 的持久化设置（默认 0 = 关）。 */
+  initialReportIntervalMinutes?: number
 }
 
 export interface PeriodicControl {
@@ -529,15 +629,24 @@ export function startPeriodicSupervision(
 ): PeriodicControl {
   const checkIntervalMs = options.checkIntervalMs ?? 60_000
   const stalledThresholdMs = options.stalledThresholdMs ?? 240_000
-  let reportIntervalMs = 0 // 定时汇报默认关闭
+  // 定时汇报默认关闭；可用 settings 里的 reportIntervalMinutes 初始化为持久值
+  const initialMinutes = options.initialReportIntervalMinutes ?? 0
+  let reportIntervalMs = Math.round(initialMinutes * 60_000)
   let lastSnapshot = ''
   let lastChangeAt = 0
-  let lastReportAt = 0
+  let lastReportAt = initialMinutes > 0 ? Date.now() : 0
   let stalledWarned = false
+
+  /** 当前 locale（引擎 ref 上的可变状态；工具切换后即时生效）。 */
+  const refLocale = (): Locale => {
+    const ref = getRef()
+    return ref && 'locale' in ref ? (ref as SupervisorEngineRef).locale.value : 'zh-CN'
+  }
 
   const check = (): void => {
     const ref = getRef()
     if (!ref || 'error' in ref) return
+    const m = messages(refLocale())
     const state = ref.engine.status()
     if (!state) return
     if (state.phase !== 'running' && state.phase !== 'planning' && state.phase !== 'paused') {
@@ -565,10 +674,7 @@ export function startPeriodicSupervision(
         stalledWarned = true
         lastReportAt = now
         const minutes = Math.round((now - lastChangeAt) / 60_000)
-        wake(
-          `[Buju supervisor] ⏱️ 疑似卡住：批次 ${state.id} 已约 ${minutes} 分钟无任何 lane 变化，且 worker 会话日志同样超时。` +
-          '请用 buju_supervisor_status / 只读工具查证 lane 日志，判断是继续等待、pause 还是 abort。',
-        )
+        wake(m.stalled(state.id, minutes))
       } else if (anyFound) {
         // 会话仍活跃：worker 在干活，重置无变化计时，避免每轮重复评估。
         lastChangeAt = now
@@ -577,20 +683,19 @@ export function startPeriodicSupervision(
     // 定时汇报（默认关闭；operator 要求后按间隔唤醒）
     if (reportIntervalMs > 0 && now - lastReportAt >= reportIntervalMs) {
       lastReportAt = now
-      wake(`[Buju supervisor] ⏱️ 定时汇报（每 ${Math.round(reportIntervalMs / 60_000)} 分钟）：\n${compactBatchStatus(state)}\n\n预计剩余：${estimateEta(state)}`)
+      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state)}\n\n${m.etaLabel}${estimateEta(state, refLocale())}`)
     }
   }
 
   const timer = setInterval(check, checkIntervalMs)
   return {
     setReportInterval(minutes: number): string {
-      if (!Number.isFinite(minutes) || minutes < 0) return `无效间隔：${minutes} 分钟（需要 ≥0 的整数，0=关闭）`
+      const m = messages(refLocale())
+      if (!Number.isFinite(minutes) || minutes < 0) return m.invalidInterval(minutes)
       reportIntervalMs = Math.round(minutes * 60_000)
       // 以设置时刻为基准：第一次汇报在完整间隔之后，而不是立即触发。
       lastReportAt = Date.now()
-      return reportIntervalMs === 0
-        ? '定时进度汇报已关闭。'
-        : `定时进度汇报已开启：每 ${minutes} 分钟汇报一次。`
+      return reportIntervalMs === 0 ? m.reportIntervalOff : m.reportIntervalOn(minutes)
     },
     getReportInterval(): number {
       return Math.round(reportIntervalMs / 60_000)

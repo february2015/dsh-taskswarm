@@ -31,6 +31,8 @@ import { BujuEngine, type EngineConfig, type BujuEvent } from './engine.ts'
 import { InProcessWorkerHost } from './in-process-host.ts'
 import { HeadlessWorkerHost, type WorkerHost } from './worker-host.ts'
 import { shouldWake, supervisorEventReport, registerSupervisor, startPeriodicSupervision, estimateEta, type SupervisorAutonomyLevel } from './supervisor.ts'
+import { resolveLocale, type LocaleState } from './i18n.ts'
+import { readSettings } from './settings.ts'
 import { scanTasks, formatWavePlan } from '../core/discover.ts'
 import { scaffoldTask } from '../core/task.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
@@ -54,6 +56,8 @@ export interface Config {
   supervisorCheckIntervalMs?: number
   /** 距上次 lane 变化超过该时长 → 唤醒"疑似卡住"提醒（毫秒），默认 240000（4 分钟）。 */
   supervisorStalledMs?: number
+  /** supervisor 通知/提示词语言：'auto'（默认，按会话语言检测）| 'zh-CN' | 'en'。.buju/config.json 的运行时设置优先。 */
+  locale?: 'auto' | 'zh-CN' | 'en'
 }
 
 export const Config: z<Config> = z.object({
@@ -69,6 +73,7 @@ export const Config: z<Config> = z.object({
   supervisorMode: z.union([z.const('off'), z.const('interactive'), z.const('supervised'), z.const('autonomous')]).default('supervised'),
   supervisorCheckIntervalMs: z.number().default(60_000),
   supervisorStalledMs: z.number().default(240_000),
+  locale: z.union([z.const('auto'), z.const('zh-CN'), z.const('en')]).default('auto'),
 })
 
 interface EngineRef {
@@ -78,6 +83,8 @@ interface EngineRef {
   stateRoot: string
   /** 该仓库的定时检查/汇报控制（engine 创建时建立）。 */
   periodic?: ReturnType<typeof startPeriodicSupervision>
+  /** 语言状态（可变；buju_supervisor_locale 工具可文字切换并持久化）。 */
+  locale: LocaleState
 }
 
 const USAGE = 'Usage: /orch [all|<task-id>|<path>]'
@@ -277,6 +284,13 @@ export function apply(ctx: Context, config: Config): void {
       : agent as { followup?(message: unknown): void; ctx?: Context } | undefined)
     const autonomy: SupervisorAutonomyLevel = supervisorMode === 'off' ? 'supervised' : supervisorMode
 
+    // 仓库级设置（.buju/config.json）：运行时文字设置优先于插件 config。
+    const repoSettings = readSettings(stateRoot)
+    // 语言状态：可变 holder，onEvent / supervisor 工具 / 定时检查共享同一份。
+    const localeState: LocaleState = {
+      value: repoSettings.locale ?? resolveLocale(config.locale, ctx.get('sessions'), agent?.session?.id),
+    }
+
     const engine = new BujuEngine({
       repoRoot,
       tasksRoot,
@@ -295,7 +309,7 @@ export function apply(ctx: Context, config: Config): void {
               try {
                 const state = engine.status()
                 target.followup(createUserMessage({
-                  content: [{ type: 'text', text: supervisorEventReport(event, state) }],
+                  content: [{ type: 'text', text: supervisorEventReport(event, state, localeState.value) }],
                   source: { kind: 'user' },
                 }))
               } catch {
@@ -308,7 +322,8 @@ export function apply(ctx: Context, config: Config): void {
     let periodic: EngineRef['periodic']
     if (supervisorAgent?.followup && supervisorMode !== 'off') {
       // 定时检查（常驻、默认开）：卡住检测。定时汇报默认关，由 operator 通过
-      // buju_supervisor_report_interval 工具开启（"每隔 X 分钟汇报一次"）。
+      // buju_supervisor_report_interval 工具开启（"每隔 X 分钟汇报一次"）；
+      // .buju/config.json 里的 reportIntervalMinutes 会作为初始间隔（跨重启生效）。
       periodic = startPeriodicSupervision(() => ref, (text) => {
         if (!supervisorAgent.followup) return
         try {
@@ -322,9 +337,10 @@ export function apply(ctx: Context, config: Config): void {
       }, {
         checkIntervalMs: config.supervisorCheckIntervalMs,
         stalledThresholdMs: config.supervisorStalledMs,
+        initialReportIntervalMinutes: repoSettings.reportIntervalMinutes,
       })
     }
-    const ref: EngineRef = { engine, repoRoot, tasksRoot, stateRoot, periodic }
+    const ref: EngineRef = { engine, repoRoot, tasksRoot, stateRoot, periodic, locale: localeState }
     engines.set(repoRoot, ref)
     return ref
   }
