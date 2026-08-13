@@ -18,7 +18,7 @@ Buju arranges a batch of tasks into dependency-ordered **waves**, runs multiple 
 - **Checkpoint discipline** — automatic git commits at step boundaries; a crashed worker never loses committed work
 - **Cross-model review** — an independent reviewer scores each task per its `Review Level`; PASS merges, REVISE sends it back for revision
 - **File mailbox** — workers and supervisor communicate asynchronously (notify / escalate / request) without shared context
-- **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard)
+- **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard); notifications and the prompt are **bilingual (中文 / English)** — say "use English" to switch, auto-detected from your session language, persisted to `.buju/config.json` across restarts
 - **Web Dashboard** — local realtime dashboard, zero-dependency node:http + SSE, multiple instances with automatic port negotiation
 - **Crash-recoverable** — durable disk state + checkpoints + retained lane branches; after a kill/restart you can salvage work, clean up residue, and re-run
 
