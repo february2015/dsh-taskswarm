@@ -28,7 +28,7 @@ test('formatBytes: 人类可读字节数', () => {
 
 test('laneSessionDir: worktree 路径 → 会话目录名（/ 转 -，前后加 --）', () => {
   assert.equal(
-    laneSessionDir('/Users/robin/myProject/dsh-buju/.taskswarm/worktrees/jm-341'),
+    laneSessionDir('/Users/robin/myProject/dsh-taskswarm/.taskswarm/worktrees/jm-341'),
     join(homedir(), '.dsh', 'sessions', '--Users-robin-myProject-dsh-buju-.taskswarm-worktrees-jm-341--'),
   )
 })
