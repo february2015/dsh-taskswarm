@@ -28,7 +28,7 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, readFileSync, rmSync } from 'node:fs'
 import type { TaskSwarmEvent, TaskSwarmEngine } from './engine.ts'
 import type { DashboardManager } from './dashboard.ts'
 import { formatBatchStatus, type BatchState, type LaneState } from '../core/status.ts'
@@ -228,12 +228,89 @@ export function eventHeadline(event: TaskSwarmEvent, locale: Locale): string {
 /** Wake message handed to the session agent（指引已由系统提示承载；状态用精简渲染+ETA）。 */
 export function supervisorEventReport(event: TaskSwarmEvent, state: BatchState | null, locale: Locale): string {
   const m = messages(locale)
-  return [
-    eventHeadline(event, locale),
-    '',
-    state ? compactBatchStatus(state, locale) : m.noBatchState,
-    state ? `\n${m.etaLabel}${estimateEta(state, locale)}` : '',
-  ].join('\n')
+  const lines = [eventHeadline(event, locale), '']
+  if (state) {
+    lines.push(compactBatchStatus(state, locale))
+    lines.push(`\n${m.etaLabel}${estimateEta(state, locale)}`)
+    // 每次通知附带该批次 worker 会话磁盘占用（operator 要求）。
+    const usage = m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))
+    lines.push(usage)
+    // 批次全成功（所有任务已合并）→ 提醒用户决定是否清理 worker 会话历史。
+    if (event.type === 'batch-complete' && (event.failed ?? 0) === 0) {
+      lines.push(m.cleanupOffer(formatBytes(sessionsBytes(state.lanes))))
+    }
+  } else {
+    lines.push(m.noBatchState)
+  }
+  return lines.join('\n')
+}
+
+/** 人类可读字节数（B/KB/MB/GB）。 */
+export function formatBytes(n: number): string {
+  if (!Number.isFinite(n) || n < 0) return '0 B'
+  if (n < 1024) return `${n} B`
+  if (n < 1024 * 1024) return `${(n / 1024).toFixed(1)} KB`
+  if (n < 1024 * 1024 * 1024) return `${(n / (1024 * 1024)).toFixed(1)} MB`
+  return `${(n / (1024 * 1024 * 1024)).toFixed(2)} GB`
+}
+
+/** lane worktree → ~/.dsh/sessions/--<path>--/ 目录（与 DSH 实际命名一致：去开头 /，其余 / 转 -，前后 --）。 */
+export function laneSessionDir(worktree: string): string {
+  const normalized = worktree.replace(/^\//, '').replace(/\//g, '-')
+  return join(homedir(), '.dsh', 'sessions', `--${normalized}--`)
+}
+
+/** 该批次所有 lane 的 worker 会话目录（只含磁盘上真实存在的，去重）。 */
+export function laneSessionDirs(lanes: LaneState[]): string[] {
+  const dirs: string[] = []
+  for (const l of lanes) {
+    if (!l.worktree) continue
+    const dir = laneSessionDir(l.worktree)
+    if (existsSync(dir)) dirs.push(dir)
+  }
+  return [...new Set(dirs)]
+}
+
+/** 递归统计目录字节数。 */
+function dirBytes(dir: string): number {
+  let total = 0
+  let entries: string[] = []
+  try {
+    entries = readdirSync(dir)
+  } catch {
+    return 0
+  }
+  for (const entry of entries) {
+    const full = join(dir, entry)
+    try {
+      const st = statSync(full)
+      total += st.isDirectory() ? dirBytes(full) : st.size
+    } catch {
+      // unreadable entry — skip
+    }
+  }
+  return total
+}
+
+/** 该批次 worker 会话磁盘占用（字节）。 */
+export function sessionsBytes(lanes: LaneState[]): number {
+  return laneSessionDirs(lanes).reduce((acc, dir) => acc + dirBytes(dir), 0)
+}
+
+/** 删除该批次所有 lane 的 worker 会话目录。返回删除的目录数与释放字节数。 */
+export function deleteLaneSessions(lanes: LaneState[]): { dirs: number; bytes: number } {
+  let bytes = 0
+  let dirs = 0
+  for (const dir of laneSessionDirs(lanes)) {
+    bytes += dirBytes(dir)
+    try {
+      rmSync(dir, { recursive: true, force: true })
+      dirs++
+    } catch {
+      // best-effort: 删不掉就跳过
+    }
+  }
+  return { dirs, bytes }
 }
 
 /**
@@ -601,6 +678,44 @@ export function registerSupervisor(
         : { ok: false, text: `Dashboard 启动失败：${r.text}` }
     },
   }))
+
+  // ── tswarm_supervisor_cleanup：批次 worker 会话历史清理（destructive，删除前需 operator 确认）──
+  register(defineTool({
+    name: 'tswarm_supervisor_cleanup',
+    description: 'TaskSwarm 历史清理：status=估算当前批次 worker 会话磁盘占用；delete=删除该批次所有 lane 的 worker 对话历史文件（destructive，删除前先征求 operator 确认）。',
+    parameters: {
+      action: {
+        type: 'string',
+        required: true,
+        enum: ['status', 'delete'],
+        description: 'status=仅估算占用；delete=删除当前批次所有 lane 的 worker 会话历史（含对话记录文件）。',
+      },
+    },
+    output: {
+      schema: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          ok: { type: 'boolean', required: true },
+          text: { type: 'string', required: true },
+        },
+      },
+      render: (_args, value) => [{ type: 'text', text: value.text }],
+    },
+    async execute(args) {
+      const ref = refOf()
+      if (!ref || 'error' in ref) return uninitialized
+      const state = ref.engine.status()
+      if (!state) return { ok: true, text: 'No batch yet.' }
+      const m = messages(ref.locale.value)
+      const action = args.action as string
+      if (action === 'delete') {
+        const r = deleteLaneSessions(state.lanes)
+        return { ok: true, text: `已删除 ${r.dirs} 个 worker 会话目录，释放 ${formatBytes(r.bytes)}。` }
+      }
+      return { ok: true, text: `${m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))}\n共 ${laneSessionDirs(state.lanes).length} 个 worker 会话目录。确认删除请用 action=delete（destructive，将不可恢复）。` }
+    },
+  }))
 }
 
 export interface PeriodicSupervisionOptions {
@@ -646,7 +761,7 @@ export interface PeriodicControl {
  * 会话子目录（前缀 `session-`）里 `session.jsonl(.zstd)` 的最新 mtime。找不到返回 0。
  */
 export function latestSessionActivity(worktree: string): number {
-  const dirName = `--${worktree.replace(/\//g, '-')}--`
+  const dirName = `--${worktree.replace(/^\//, '').replace(/\//g, '-')}--`
   const sessionsRoot = join(homedir(), '.dsh', 'sessions')
   const dir = join(sessionsRoot, dirName)
   let latest = 0
@@ -732,7 +847,7 @@ export function startPeriodicSupervision(
         stalledWarned = true
         lastReportAt = now
         const minutes = Math.round((now - lastChangeAt) / 60_000)
-        wake(m.stalled(state.id, minutes))
+        wake(`${m.stalled(state.id, minutes)}\n${m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))}`)
       } else if (anyFound) {
         // 会话仍活跃：worker 在干活，重置无变化计时，避免每轮重复评估。
         lastChangeAt = now
@@ -758,7 +873,7 @@ export function startPeriodicSupervision(
     // 定时汇报（默认关闭；operator 要求后按间隔唤醒）
     if (reportIntervalMs > 0 && now - lastReportAt >= reportIntervalMs) {
       lastReportAt = now
-      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state, refLocale())}\n\n${m.etaLabel}${estimateEta(state, refLocale())}`)
+      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state, refLocale())}\n\n${m.etaLabel}${estimateEta(state, refLocale())}\n${m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))}`)
     }
   }
 

@@ -51,6 +51,10 @@ export interface SupervisorMessages {
   localeSwitchedTo(locale: Locale, configPath: string): string
   /** 波次执行期间自动拉起 dashboard 成功后的通知（含链接）。 */
   dashboardUrl(url: string): string
+  /** 每次通知附带的该批次 worker 会话磁盘占用。 */
+  sessionsUsage(bytes: string): string
+  /** 批次全成功后的清理提醒（是否删除该批次 worker 会话历史）。 */
+  cleanupOffer(bytes: string): string
 }
 
 const zhCN: SupervisorMessages = {
@@ -80,6 +84,9 @@ const zhCN: SupervisorMessages = {
   localeSwitchedTo: (locale, configPath) =>
     `已切换为${locale === 'en' ? '英文' : '中文'}，通知与 supervisor 提示词即时生效，并已写入 ${configPath}。`,
   dashboardUrl: (url) => `📊 Dashboard 已启动：${url}（浏览器打开即可查看实时进度）`,
+  sessionsUsage: (bytes) => `💾 本批次 worker 会话磁盘占用：${bytes}`,
+  cleanupOffer: (bytes) =>
+    `✅ 全部任务已成功合并。要清理本批次 worker 的对话历史文件（${bytes}）吗？回复「保留」或「删除」即可。`,
 }
 
 const en: SupervisorMessages = {
@@ -109,6 +116,9 @@ const en: SupervisorMessages = {
   localeSwitchedTo: (locale, configPath) =>
     `Switched to ${locale === 'en' ? 'English' : 'Chinese'} — notifications and the supervisor prompt take effect immediately, and the choice is saved to ${configPath}.`,
   dashboardUrl: (url) => `📊 Dashboard started: ${url} (open it in your browser for live progress)`,
+  sessionsUsage: (bytes) => `💾 Worker session disk usage (this batch): ${bytes}`,
+  cleanupOffer: (bytes) =>
+    `✅ All tasks merged successfully. Clean up this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
 }
 
 const dictionaries: Record<Locale, SupervisorMessages> = { 'zh-CN': zhCN, en }
