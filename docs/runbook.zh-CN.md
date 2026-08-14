@@ -324,6 +324,8 @@ rm .buju/batches/<batchId>.json
 
 因为 `buju/<taskId>` 分支还在，新 worktree 会**附着旧分支**——从旧检查点续跑而非从零。
 
+> ⚠️ **同波 fmt 任务冲突（2026-08-14 实测）**：同波内若有 `cargo fmt --all` 类任务（全仓重排 .rs，一次可达 69 文件），与同波改 .rs 的其他任务**必然 merge 冲突**（如 external/lib.rs、main/system.rs、biz-core/scope.rs）。处置：`_orch` worktree 里对冲突文件 `git checkout --theirs -- <file>` 取 worker 功能版本 → `git add` → 完成合并 → **波末统一跑 `cargo fmt --all` 提交归一**（否则 W2 起 lane 从含混合格式的基线出发）。预防：fmt 类任务单波执行，或 File Scope 限定为 `cargo fmt --check` 实际报错的文件清单。
+
 ### 7.2 REVISE（phase=review）
 
 reviewer 结论为 REVISE 时 lane 进入 `review`，任务未标记 done。处置：
@@ -376,6 +378,56 @@ git branch | grep -E 'buju/'
   端口占用 → 引擎自动避让，或手动 `--port` 指定。
 - **worker 无工具 / 沙箱审批弹窗**：已修复（KI-002/KI-005），worker 会话自带
   full-access + 免审批；GUI 会话与全局配置不受影响。若仍出现，查 worker 工具装配。
+
+---
+
+### 7.6 假死：lane 已完成但迟迟不 complete（2026-08-14 实测）
+
+**现象**：lane 显示 100%（步骤全 [x]）但长时间 `[running]` 不进入 merged；批次 JSON 中该 lane
+`log` 只有 `starting <task>`，无 `advance step / worker exited / done` 事件（对比正常 lane 有
+`worker exited 0`）；worker 进程已消失。
+
+**根因**：worker 进程异常退出/失联，supervisor 未收到其进度与退出事件，lane 未回收；
+`resume` 对"未暂停的失联 lane"无效（不会重新拉起 worker）。
+
+**判定**（先判"活是否干完"，再治"状态卡死"）：
+
+```bash
+# ① 批次 lane log：只有 "starting" 而无 worker 事件 → 疑似失联
+python3 -c "import json;d=json.load(open('.buju/batches/<batch>.json'));[print(l['lane'],l['phase'],l['log']) for l in d['lanes']]"
+# ② worktree 是否有实际提交（工作已完成 = 有提交且 status 干净）
+git -C .buju/worktrees/<taskId> log --oneline -5
+git -C .buju/worktrees/<taskId> status --short   # 空 = 已提交干净
+# ③ 核对产出满足 PROMPT 验收（关键产物存在 + 门禁可过：tsc -b / cargo check）
+# ④ worker 进程是否已消失
+ps aux | grep <taskId> | grep -v grep
+```
+
+**处理流程**（确认产出满足验收后的手动收尾）：
+
+1. 写完成标记与审计记录（手动操作必须可追溯）：
+   ```bash
+   date -u +%Y-%m-%dT%H:%M:%SZ > tasks/<taskId>/.DONE
+   # STATUS.md 追加 Execution Log：supervisor manual finalize + 原因
+   ```
+2. 合并分支：`integrate` 后**必须核对主干是否真包含改动**（`git log` + 关键产物），
+   integrate 可能合不全甚至误报"已经是最新的"（§7.6 实测）；缺了就手动
+   `git merge buju/<taskId> --no-edit`。
+3. 跨任务冲突：同一文件被两个任务改（如 bflow.tsx 被 JM-333 与 JM-340 同时改）时，
+   冲突取"功能并集"，并清理因组件抽离产生的**未使用 import**（否则 tsc 报错）。
+4. 验证：`tsc -b` / `cargo check` / 关键产物存在 → `git commit --no-edit`。
+
+**工具坑（勿踩）**：
+
+- `abort` 是**批次级**操作，scope 不生效，会 abort 整个批次（含未启动 lane）；误操作后用
+  `resume` 恢复（aborted → running）。**无法用 abort 释放单个 lane 的调度槽**。
+- `start` 在批次 phase=running 时拒绝启动新批次。
+- 手动改 `.buju/batches/*.json` 的 lane phase：引擎内存**不重读**，无法推进调度
+  （但重启引擎后会被读取——所以仍建议改，配合重启恢复，见 KI-007）。
+
+**最终恢复**：上述手段都无法让引擎推进 wave 时，唯一可靠恢复是**重启 DSH 引擎（新开会话）**
+——引擎重启后重新加载批次 JSON（失联 lane 已手工标记 merged），wave 推进、剩余任务按新
+plan 继续。代码成果在手动收尾时已保住（在主干），重启无损失。
 
 ---
 

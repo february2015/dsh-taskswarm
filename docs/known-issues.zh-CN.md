@@ -48,6 +48,36 @@
   （actions.jsonl/events.jsonl）、分支保护检测、CI/PR 生命周期、批次摘要
   markdown 模板。事件契约已就位，可在此基础上增量补齐。
 
+### KI-007: 引擎按 wave 推进且内存状态不重读——lane 全 merged 后后续 wave 不调度，只能重启引擎
+
+- **状态:** ⬜ OPEN（2026-08-14 批次 `b-mss7l7sm-4217b2` 实测；workaround 见 runbook §7.6）
+- **发现日期:** 2026-08-14
+- **现象:** 批次 wave 1 全部 lane merged（含手动标记的失联 lane）后，wave 2 及后续 lane
+  长时间 `pending`、无 worker 启动、并行度空转；`plan` 已正确重排剩余任务（引擎读到了新
+  状态），但就是不调度；改 `.buju/batches/*.json` 的 lane phase 不生效；`start` 因批次
+  phase=running 拒绝开新批次。唯一恢复手段是重启 DSH 引擎（新开会话），引擎重启后重新
+  加载批次 JSON，wave 才推进。
+- **根因（推断，待代码确认）:** 引擎调度是**事件驱动 + 内存状态**：`pause` 提示
+  "will pause after the current wave" 证实引擎按 wave 推进；失联 lane（worker 事件丢失）
+  在引擎内存中仍是 `running` → 当前 wave 判定为"未完成" → 后续 wave 永不启动。引擎
+  内存状态不随磁盘批次 JSON 修改而刷新（plan 重算读盘、调度判定用内存，二者不一致）。
+- **相关代码位置:**
+  - `src/orchestrator/engine.ts` — wave 推进与"wave 完成"判定（疑似用内存 lane.phase）
+  - `src/orchestrator/in-process-host.ts` — worker 派生/退出事件上报
+  - `src/core/status.ts` — `updateLane` / `writeBatchState`（磁盘落盘 vs 内存）
+- **候选修复方案（按成本排序）:**
+  - **A（推荐，最小）:** wave 推进判定前**重新加载磁盘批次 JSON**（或对内存 lanes 做
+    reconcile：以磁盘为准修正内存 phase）。失联 lane 被手工标记 merged 后，无需重启即可
+    推进 wave。
+  - **B（防再犯）:** worker **心跳/看门狗**：lane 超过 N 分钟无任何事件 → 自动标记
+    `failed/lost`（保留 worktree/分支供排查），避免 lane 无限期占 running 阻塞调度。
+  - **C（supervisor 工具）:** `buju_supervisor_control` 增加 lane 级状态修正动作
+    （如 `mark <taskId> merged/failed`），走引擎受控路径而非直接改 JSON。
+  - **D（工程化）:** 引擎统一"内存 = 磁盘"（单一写者/串行队列），根治事件丢失导致的
+    状态漂移（与 KI-003 同源工程化方向）。
+- **临时 workaround:** 见 runbook §7.6（手动收尾保住代码 → 标记 merged → 重启引擎恢复
+  调度）。
+
 ---
 
 ## RESOLVED
