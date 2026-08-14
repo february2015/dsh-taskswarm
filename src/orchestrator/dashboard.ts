@@ -45,10 +45,11 @@ export class DashboardManager {
 
   /**
    * Idempotent start — 同工作区单实例保证：
-   * 1. 本 manager 已跟踪的运行中实例 → 复用；
+   * 1. 本 manager 已跟踪的运行中实例 → 复用（不弹浏览器）；
    * 2. 扫描端口找「已在服务同一 repoRoot」的 dashboard（外部手动启动 / 残留
-   *    孤儿进程），命中则复用其 URL，绝不重复拉起；
-   * 3. 都没有 → spawn `dashboard/server.mjs --root <repo> --no-open`。
+   *    孤儿进程），命中则复用其 URL，绝不重复拉起（不弹浏览器）；
+   * 3. 都没有 → spawn `dashboard/server.mjs --root <repo>`（**自动打开浏览器**，
+   *    不带 --no-open；server 启动后自动 open 默认浏览器）。
    * `port` 可选 —— 不传时 server 自动避让到空闲端口；显式传入也会一并探测。
    */
   async ensure(repoRoot: string, port?: number): Promise<DashboardResult> {
@@ -59,7 +60,7 @@ export class DashboardManager {
     if (!existsSync(DASHBOARD_SERVER_PATH)) {
       return { ok: false, text: `未找到 dashboard server：${DASHBOARD_SERVER_PATH}（先 build / integrate）` }
     }
-    const args = [DASHBOARD_SERVER_PATH, '--root', repoRoot, '--no-open']
+    const args = [DASHBOARD_SERVER_PATH, '--root', repoRoot]
     if (port !== undefined && Number.isFinite(port) && port >= 0) args.push('--port', String(port))
     const proc = spawn(process.execPath, args, {
       stdio: ['ignore', 'pipe', 'pipe'],
