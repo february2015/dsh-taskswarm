@@ -233,9 +233,11 @@ export class TaskSwarmEngine {
   private async runLane(ctx: RunContext, state: BatchState, task: WavePlan['tasks'][number]): Promise<LaneState> {
     const { config, paths, batchId } = ctx
     const existing = state.lanes.find((l) => l.taskId === task.id)
-    // 方案 A（KI-007）：续跑/恢复时跳过已完成 lane（磁盘状态为准，防止重跑已 merged/failed 任务）。
-    if (existing && (existing.phase === 'merged' || existing.phase === 'failed')) {
-      laneLog(existing, `skipped (already ${existing.phase})`)
+    // 方案 A（KI-007）：续跑/恢复时跳过**已完成** lane（仅 merged 才算完成，防止恢复时重跑）；
+    // failed 不跳过——失败 lane 需要重跑续接（检查点保留在分支，worker 从 STATUS 继续）。
+    // （2026-08-14 修正：原先 merged||failed 都跳过，导致重跑失败 lane 被错误跳过。）
+    if (existing && existing.phase === 'merged') {
+      laneLog(existing, 'skipped (already merged)')
       return existing
     }
     const lane: LaneState = {
