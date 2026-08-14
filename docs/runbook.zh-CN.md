@@ -121,7 +121,7 @@ dsh plugin --profile web add ~/myProject/taskswarm   # 追加 taskswarm bundle �
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous`（自主度） |
 | `supervisorCheckIntervalMs`            | 60000                                    | 定时检查间隔（1 分钟，只读零成本）                                       |
 | `supervisorStalledMs`                  | 240000                                   | 卡住判定阈值（4 分钟无 lane 变化）                                    |
-| `laneTimeoutMinutes`                   | 90                                       | 单 lane 看门狗超时（分钟）：worker 超时无完成事件 → 强制结束该 lane（failed）并继续下一 wave（KI-007 方案 B）。`0` = 禁用（不建议，退回"只能重启引擎"的假死态） |
+| `laneTimeoutMinutes`                   | 180                                      | 单 lane 看门狗超时（分钟）：worker 超时无完成事件 → 强制结束该 lane（failed）并继续下一 wave（KI-007 方案 B）。`0` = 禁用（不建议，退回"只能重启引擎"的假死态） |
 | `locale`                               | `auto`                                   | supervisor 通知/提示词语言：`auto`（按会话语言检测）/ `zh-CN` / `en`。运行时可用文字切换并写入 `.taskswarm/config.json`（见 §3.5） |
 
 ### 3.5 仓库级配置文件（`.taskswarm/config.json`）
@@ -384,7 +384,7 @@ git branch | grep -E 'taskswarm/'
 
 ### 7.6 假死：lane 已完成但迟迟不 complete（2026-08-14 实测）
 
-> ⚠️ **v0.1.1 起已根治（KI-007）**：引擎带 `laneTimeoutMinutes` 看门狗（默认 90 分钟），
+> ⚠️ **v0.1.1 起已根治（KI-007）**：引擎带 `laneTimeoutMinutes` 看门狗（默认 180 分钟），
 > worker 超时无完成事件会自动强制结束该 lane（failed）并继续下一 wave，**新批次不再需要
 > 重启引擎**。本流程用于：① 存量僵局批次（如本批 `b-mss7l7sm-4217b2`，引擎无看门狗）；②
 > 手动收尾保住已完成 lane 的代码成果；③ 看门狗被配置为 0（禁用）的环境。
