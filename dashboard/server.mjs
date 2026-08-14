@@ -1,13 +1,13 @@
 #!/usr/bin/env node
 /**
- * Buju Dashboard — local HTTP server with SSE live updates.
+ * TaskSwarm Dashboard — local HTTP server with SSE live updates.
  *
  * Port of TaskPlane `dashboard/server.cjs` (github.com/HenryLach/taskplane,
- * MIT License) to ESM + dsh-buju data sources. Keeps every upstream advantage:
+ * MIT License) to ESM + taskswarm data sources. Keeps every upstream advantage:
  * node:http with zero external dependencies, SSE initial-state + 2s polling +
  * `fs.watch` instant push, `--port/--root/--no-open` CLI, auto-open browser,
  * graceful shutdown. State JSON is produced by WEB-002's `dashboard/adapters.mjs`
- * (`buildDashboardState`) — this module never parses `.buju` files itself.
+ * (`buildDashboardState`) — this module never parses `.taskswarm` files itself.
  *
  * ─── Routing composition contract (WEB-003 × WEB-004) ──────────────────────
  * The server is a route-registry so WEB-004 (history/status-md/preferences)
@@ -36,7 +36,7 @@
  * Usage:
  *   node dashboard/server.mjs [--port 8100] [--root /path/to/repo] [--no-open]
  *
- * @module buju/dashboard/server
+ * @module taskswarm/dashboard/server
  */
 import http from 'node:http'
 import fs from 'node:fs'
@@ -57,14 +57,14 @@ const WATCH_DEBOUNCE_MS = 200 // ms debounce after an fs.watch event (upstream c
 // ─── CLI Args ────────────────────────────────────────────────────────────────
 
 const HELP_TEXT = `
-Buju Dashboard — local HTTP server with SSE live updates
+TaskSwarm Dashboard — local HTTP server with SSE live updates
 
 Usage:
   node dashboard/server.mjs [options]
 
 Options:
   --port <number>   Port to listen on (default: ${DEFAULT_PORT})
-  --root <path>     Project root containing .buju/ and tasks/ (default: current directory)
+  --root <path>     Project root containing .taskswarm/ and tasks/ (default: current directory)
   --no-open         Don't auto-open browser
   -h, --help        Show this help
 `
@@ -196,7 +196,7 @@ function matchSegments(pattern, segs) {
   return params
 }
 
-// ─── State building (via WEB-002 adapters — never parse .buju here) ─────────
+// ─── State building (via WEB-002 adapters — never parse .taskswarm here) ─────────
 
 /** Full dashboard state for the current batch (empty state when none exists). */
 function buildState(ctx) {
@@ -339,9 +339,11 @@ export function registerCore(router, ctx = {}) {
     sendJson(res, 200, buildState(c))
   })
 
-  // Health check.
+  // Health check — `root` identifies which repo this dashboard serves, so
+  // callers can detect an existing instance for the same workspace and must
+  // never spawn a second one (one dashboard per repo, ever).
   router.on('GET', '/api/health', (req, res) => {
-    sendJson(res, 200, { status: 'ok', timestamp: Date.now() })
+    sendJson(res, 200, { status: 'ok', root: ctx?.root ?? null, timestamp: Date.now() })
   })
 
   // Static files — catch-all GET, dispatched last by the router.
@@ -452,7 +454,7 @@ async function findPort(router, ctx, start, explicit) {
 export async function main() {
   const opts = parseArgs()
   const root = path.resolve(opts.root || process.cwd())
-  const stateRoot = path.join(root, '.buju')
+  const stateRoot = path.join(root, '.taskswarm')
   const tasksRoot = path.join(root, 'tasks')
 
   // Data dependencies shared with WEB-004's registerExtra (history.mjs).
@@ -470,13 +472,13 @@ export async function main() {
   const explicitPort = process.argv.slice(2).includes('--port')
   const { server, port } = await findPort(router, ctx, opts.port, explicitPort)
 
-  console.log(`\n  Buju Dashboard → http://localhost:${port}\n`)
+  console.log(`\n  TaskSwarm Dashboard → http://localhost:${port}\n`)
 
   // Broadcast state to all SSE clients on interval (upstream POLL_INTERVAL).
   const pollTimer = setInterval(() => broadcastState(ctx), POLL_INTERVAL)
 
   // Also watch <stateRoot>/batches/ for instant push on any batch change.
-  // dsh-buju persists one BatchState JSON per batch in `batches/` (upstream
+  // taskswarm persists one BatchState JSON per batch in `batches/` (upstream
   // watched a single batch-state.json in .pi/) — any event triggers a
   // 200ms-debounced broadcast.
   let watcher = null

@@ -3,7 +3,7 @@
  * Ported from TaskPlane `extensions/taskplane/naming.ts`
  * (github.com/HenryLach/taskplane, MIT License), with the OrchestratorConfig
  * dependency removed.
- * @module buju/core/naming
+ * @module taskswarm/core/naming
  */
 import { basename, resolve } from 'node:path'
 import { userInfo } from 'node:os'
@@ -25,13 +25,13 @@ export function sanitizeNameComponent(raw: string, maxLen: number = 16): string 
 
 /**
  * Resolve the operator identifier used in lane/session naming.
- * Resolution order: BUJU_OPERATOR_ID env → explicit override → OS username → "op".
+ * Resolution order: TASKSWARM_OPERATOR_ID env → explicit override → OS username → "op".
  */
 export function resolveOperatorId(
   override?: string,
   env: Record<string, string | undefined> = process.env,
 ): string {
-  const candidates = [env.BUJU_OPERATOR_ID, override]
+  const candidates = [env.TASKSWARM_OPERATOR_ID, override]
   for (const raw of candidates) {
     if (raw && raw.trim()) {
       const sanitized = sanitizeNameComponent(raw.trim(), 12)

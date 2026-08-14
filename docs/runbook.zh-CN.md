@@ -1,6 +1,6 @@
-# Buju 运维手册（Runbook）
+# TaskSwarm 运维手册（Runbook）
 
-> 本手册是 **supervisor / AI 代理 / 人类 operator** 操作 Buju 批次的标准作业程序（SOP）。
+> 本手册是 **supervisor / AI 代理 / 人类 operator** 操作 TaskSwarm 批次的标准作业程序（SOP）。
 > 目标是：任何安装本工具的人（或 AI）遇到以下场景，都能按步骤诊断、处置、恢复，且不丢活。
 > 
 > 覆盖三大类：
@@ -9,7 +9,7 @@
 > - **异常处置**（Part B）：清理残留、错误恢复、工作抢救
 > - **参考**（Part C）：动作分类、波次依赖语义、known-issues 关联
 > 
-> 所有命令以仓库根为 cwd（如 `~/myProject/dsh-buju`）。动作分类（diagnostic /
+> 所有命令以仓库根为 cwd（如 `~/myProject/taskswarm`）。动作分类（diagnostic /
 > tier0_known / destructive）与 supervisor 自主度规则一致，见 §9。
 
 ---
@@ -18,16 +18,16 @@
 
 ## 1. 状态模型速览（先看懂状态，再动手）
 
-Buju 的**唯一权威状态**是磁盘上的 `.buju/`，不是内存。进程重启后引擎内存态清空，
-只剩磁盘态——所以一切恢复都从读 `.buju/` 开始。
+TaskSwarm 的**唯一权威状态**是磁盘上的 `.taskswarm/`，不是内存。进程重启后引擎内存态清空，
+只剩磁盘态——所以一切恢复都从读 `.taskswarm/` 开始。
 
 ```
 <repo>/
-├── .buju/
+├── .taskswarm/
 │   ├── batches/<batchId>.json   # 批次唯一权威状态（phase + lanes[]）
 │   ├── mailbox/<batchId>/       # agent 间异步消息（supervisor/inbox、<lane>/outbox、broadcast）
 │   └── worktrees/
-│       ├── _orch/               # buju/orch 集成分支的常驻 worktree（引擎基础设施，勿删）
+│       ├── _orch/               # taskswarm/orch 集成分支的常驻 worktree（引擎基础设施，勿删）
 │       └── <taskId>/            # 每个 lane 的隔离 worktree
 ├── tasks/<ID>-<slug>/
 │   ├── PROMPT.md                # 任务使命/步骤（分界线以上不可变）
@@ -44,18 +44,18 @@ Buju 的**唯一权威状态**是磁盘上的 `.buju/`，不是内存。进程�
 
 | 分支              | 角色                             | 生命周期                           |
 | --------------- | ------------------------------ | ------------------------------ |
-| `buju/orch`     | 集成分支，所有 lane 产物汇总于此            | 常驻，引擎自动创建，**勿删**               |
-| `buju/<taskId>` | 单个 lane 的工作分支（检查点 commit 都在上面） | merge 成功后被删；失败/abort/崩溃时**残留** |
+| `taskswarm/orch`     | 集成分支，所有 lane 产物汇总于此            | 常驻，引擎自动创建，**勿删**               |
+| `taskswarm/<taskId>` | 单个 lane 的工作分支（检查点 commit 都在上面） | merge 成功后被删；失败/abort/崩溃时**残留** |
 
 **关键机制**（代码依据 `src/core/worktree.ts`、`src/orchestrator/engine.ts`）：
 
-- **检查点纪律**：worker 在步骤边界和退出时执行 checkpoint commit 到 `buju/<taskId>`。
+- **检查点纪律**：worker 在步骤边界和退出时执行 checkpoint commit 到 `taskswarm/<taskId>`。
   进程崩溃不丢已 commit 的产物——这是抢救的根基。
-- **重跑自动续接**：`createLaneWorktree` 若发现 `buju/<taskId>` 分支已存在，会
+- **重跑自动续接**：`createLaneWorktree` 若发现 `taskswarm/<taskId>` 分支已存在，会
   `git worktree add <branch> <dir>` **附着既有分支**而非新建（KI-004 修复）。
   所以重跑失败任务 = 从旧检查点继续，不是从零开始。
 - **abort 语义**：协作式，在波次边界生效；会 kill 运行中 lane 并 `worktree remove` 所有
-  lane worktree，但 **`buju/<taskId>` 分支保留**（供排查/抢救）。
+  lane worktree，但 **`taskswarm/<taskId>` 分支保留**（供排查/抢救）。
 - **进程崩溃/重启**：引擎 `active` 内存表清空 → `pause / resume / abort` 全部变 no-op
   （"No running batch"）；磁盘态停在崩溃前一刻（可能 phase=running 但无引擎在跑）。
 
@@ -65,22 +65,22 @@ Buju 的**唯一权威状态**是磁盘上的 `.buju/`，不是内存。进程�
 
 | 场景                      | 判定方法                                     | 分类          | 标准动作                                       |
 | ----------------------- | ---------------------------------------- | ----------- | ------------------------------------------ |
-| 看批次状态                   | `/buju-status` 或读 `.buju/batches/*.json` | diagnostic  | 直接查证，无需确认                                  |
-| 看波次计划 / 依赖图             | `/buju-plan [scope]`、`/buju-deps`        | diagnostic  | 只读，直接做                                     |
-| 列活跃 lane 与 worktree     | `/buju-sessions`                         | diagnostic  | 只读，直接做                                     |
-| 看 worker 会话日志 / mailbox | `~/.dsh/sessions/…`、`.buju/mailbox/…`    | diagnostic  | §5.3 / §5.4                                |
-| 开/关定时汇报                 | "每隔 X 分钟汇报一次"                            | tier0_known | `buju_supervisor_report_interval <N>`（0=关） |
-| pause / resume          | phase=paused 或 running                   | tier0_known | `buju_supervisor_control pause/resume`     |
+| 看批次状态                   | `/tswarm-status` 或读 `.taskswarm/batches/*.json` | diagnostic  | 直接查证，无需确认                                  |
+| 看波次计划 / 依赖图             | `/tswarm-plan [scope]`、`/tswarm-deps`        | diagnostic  | 只读，直接做                                     |
+| 列活跃 lane 与 worktree     | `/tswarm-sessions`                         | diagnostic  | 只读，直接做                                     |
+| 看 worker 会话日志 / mailbox | `~/.dsh/sessions/…`、`.taskswarm/mailbox/…`    | diagnostic  | §5.3 / §5.4                                |
+| 开/关定时汇报                 | "每隔 X 分钟汇报一次"                            | tier0_known | `tswarm_supervisor_report_interval <N>`（0=关） |
+| pause / resume          | phase=paused 或 running                   | tier0_known | `tswarm_supervisor_control pause/resume`     |
 | 清 `.git/index.lock`     | `ls .git/index.lock`（确认无 git 进程）         | tier0_known | `rm .git/index.lock`                       |
 | 重试失败的 merge             | lane error="merge failed: ..."           | tier0_known | 排查冲突后重试                                    |
 | 改 src 后 GUI 不生效         | 行为还是旧的                                   | —           | `npm run build` + 重启 dsh web（§3.2）         |
-| 新建任务包                   | tasks/ 下缺任务                              | —           | `/buju-init` 或按 §4.1 手写                    |
+| 新建任务包                   | tasks/ 下缺任务                              | —           | `/tswarm-init` 或按 §4.1 手写                    |
 | 手动改任务状态 / 删 .DONE       | 状态与实际不符                                  | destructive | 确认后按 §4.4                                  |
-| 删残留 lane 分支             | `git branch` 见 `buju/<id>`               | destructive | 先验证并入 orch，再 `git branch -D`（§6.2）         |
+| 删残留 lane 分支             | `git branch` 见 `taskswarm/<id>`               | destructive | 先验证并入 orch，再 `git branch -D`（§6.2）         |
 | 删残留 worktree            | `git worktree list`                      | destructive | 先抢救未提交内容，再 `worktree remove --force`（§6.3） |
-| 删 mailbox / 批次记录        | `ls .buju/mailbox`、`.buju/batches`       | destructive | `rm -rf`（见 §6.4/§6.5 取舍）                   |
-| abort 批次                | phase=running                            | destructive | `buju_supervisor_control abort`            |
-| integrate 到工作分支         | 批次完成后                                    | destructive | `buju_supervisor_control integrate`        |
+| 删 mailbox / 批次记录        | `ls .taskswarm/mailbox`、`.taskswarm/batches`       | destructive | `rm -rf`（见 §6.4/§6.5 取舍）                   |
+| abort 批次                | phase=running                            | destructive | `tswarm_supervisor_control abort`            |
+| integrate 到工作分支         | 批次完成后                                    | destructive | `tswarm_supervisor_control integrate`        |
 | 修改 STATUS/.DONE/批次状态    | —                                        | destructive | 先征求 operator 确认                            |
 | 进程崩溃/重启后恢复              | phase 卡 running、abort 报 no-op            | destructive | 按 §7.4 六步走                                 |
 
@@ -94,12 +94,12 @@ Buju 的**唯一权威状态**是磁盘上的 `.buju/`，不是内存。进程�
 ### 3.1 安装到 DSH
 
 ```bash
-cd ~/myProject/dsh-buju && npm run build
-dsh plugin --profile web add ~/myProject/dsh-buju   # 追加 dsh-buju bundle 到 web profile
-# 重启 dsh web 后，会话里 /buju-init → /buju all → /buju-status
+cd ~/myProject/taskswarm && npm run build
+dsh plugin --profile web add ~/myProject/taskswarm   # 追加 taskswarm bundle 到 web profile
+# 重启 dsh web 后，会话里 /tswarm-init → /tswarm all → /tswarm-status
 ```
 
-卸载：`dsh plugin --profile web remove dsh-buju`（同样需重启生效）。
+卸载：`dsh plugin --profile web remove taskswarm`（同样需重启生效）。
 
 > 发布到 npm / 版本号管理（维护者）：见 `docs/release.zh-CN.md`。
 
@@ -114,25 +114,25 @@ dsh plugin --profile web add ~/myProject/dsh-buju   # 追加 dsh-buju bundle 到
 
 | 配置                                     | 默认                                       | 说明                                                       |
 | -------------------------------------- | ---------------------------------------- | -------------------------------------------------------- |
-| `repoRoot` / `tasksRoot` / `stateRoot` | 会话 cwd / `<repo>/tasks` / `<repo>/.buju` | 仓库、任务包、状态三根路径                                            |
-| `host`                                 | `in-process`                             | `headless` 走 `dsh --profile buju-worker` 子进程             |
+| `repoRoot` / `tasksRoot` / `stateRoot` | 会话 cwd / `<repo>/tasks` / `<repo>/.taskswarm` | 仓库、任务包、状态三根路径                                            |
+| `host`                                 | `in-process`                             | `headless` 走 `dsh --profile taskswarm-worker` 子进程             |
 | `workerModel` / `reviewerModel`        | 会话默认                                     | worker / reviewer 模型覆盖                                   |
 | `includeDoneTasks`                     | false                                    | true 时连有 `.DONE` 的任务也扫描（重跑已完成任务）                         |
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous`（自主度） |
 | `supervisorCheckIntervalMs`            | 60000                                    | 定时检查间隔（1 分钟，只读零成本）                                       |
 | `supervisorStalledMs`                  | 240000                                   | 卡住判定阈值（4 分钟无 lane 变化）                                    |
 | `laneTimeoutMinutes`                   | 90                                       | 单 lane 看门狗超时（分钟）：worker 超时无完成事件 → 强制结束该 lane（failed）并继续下一 wave（KI-007 方案 B）。`0` = 禁用（不建议，退回"只能重启引擎"的假死态） |
-| `locale`                               | `auto`                                   | supervisor 通知/提示词语言：`auto`（按会话语言检测）/ `zh-CN` / `en`。运行时可用文字切换并写入 `.buju/config.json`（见 §3.5） |
+| `locale`                               | `auto`                                   | supervisor 通知/提示词语言：`auto`（按会话语言检测）/ `zh-CN` / `en`。运行时可用文字切换并写入 `.taskswarm/config.json`（见 §3.5） |
 
-### 3.5 仓库级配置文件（`.buju/config.json`）
+### 3.5 仓库级配置文件（`.taskswarm/config.json`）
 
-operator 用文字设置的运行时配置，持久化在 `<repo>/.buju/config.json`，**跨重启生效**。
+operator 用文字设置的运行时配置，持久化在 `<repo>/.taskswarm/config.json`，**跨重启生效**。
 优先级：**config.json（运行时最新意图）> 插件 Config（安装方默认）> 内置默认**。
 
 | 键 | 取值 | 设置方式（文字） |
 |---|---|---|
-| `locale` | `zh-CN` / `en`（`auto` 通过移除该键表达） | "用英文汇报" / "用中文" / "恢复自动" → `buju_supervisor_locale` 工具 |
-| `reportIntervalMinutes` | 整数 ≥0（0=关） | "每隔 15 分钟汇报一次" → `buju_supervisor_report_interval` 工具 |
+| `locale` | `zh-CN` / `en`（`auto` 通过移除该键表达） | "用英文汇报" / "用中文" / "恢复自动" → `tswarm_supervisor_locale` 工具 |
+| `reportIntervalMinutes` | 整数 ≥0（0=关） | "每隔 15 分钟汇报一次" → `tswarm_supervisor_report_interval` 工具 |
 
 候选扩展键（设计槽位，引擎创建时读取）：`supervisorMode`、`workerModel`、
 `reviewerModel`、`includeDoneTasks`。文件为 JSON 合并写，新增键不影响旧读者。
@@ -152,8 +152,8 @@ operator 用文字设置的运行时配置，持久化在 `<repo>/.buju/config.j
 
 ### 4.1 创建
 
-- 快速示例：`/buju-init`（scaffold `EXAMPLE-001-hello-world`、`EXAMPLE-002-parallel-smoke`；
-  传前缀如 `/buju-init WEB` 则生成 WEB-001/WEB-002）。
+- 快速示例：`/tswarm-init`（scaffold `EXAMPLE-001-hello-world`、`EXAMPLE-002-parallel-smoke`；
+  传前缀如 `/tswarm-init WEB` 则生成 WEB-001/WEB-002）。
 - 空项目时 `start all` 也会自动初始化示例任务（`autoInitIfEmpty`）。
 - 手写：在 `tasks/` 下建 `<ID>-<slug>/` 目录，放 `PROMPT.md` + `STATUS.md`。
 
@@ -209,9 +209,9 @@ lane 结束时引擎判定：STATUS 是 ✅ 或 ❌（或存在 `.DONE`）才算
 
 ### 5.2 定时汇报
 
-- 默认关闭；operator 说"每隔 X 分钟汇报一次"即开启（`buju_supervisor_report_interval`）。
+- 默认关闭；operator 说"每隔 X 分钟汇报一次"即开启（`tswarm_supervisor_report_interval`）。
 - 0 = 关闭；设置后第一个完整间隔才汇报，不立即触发。
-- 间隔持久化到 `.buju/config.json`（`reportIntervalMinutes`），**重启后仍生效**；文案随
+- 间隔持久化到 `.taskswarm/config.json`（`reportIntervalMinutes`），**重启后仍生效**；文案随
   当前语言（`locale`）双语。
 
 ### 5.3 worker 会话日志（排查失败/卡住的现场）
@@ -220,15 +220,15 @@ worker 会话目录按 lane worktree 绝对路径转义命名：
 
 ```bash
 ls ~/.dsh/sessions/--<worktree路径用-替换/>--/
-# 例：--Users-robin-myProject-dsh-buju-.buju-worktrees-demo-006--
+# 例：--Users-robin-myProject-taskswarm-.taskswarm-worktrees-demo-006--
 # 其下 session-*/session.jsonl(.zstd) 为完整对话/工具调用记录
 ```
 
 ### 5.4 mailbox 排查（worker 在说什么）
 
 ```bash
-ls .buju/mailbox/<batchId>/supervisor/inbox/      # 未处理消息
-ls .buju/mailbox/<batchId>/supervisor/ack/        # 已 ack 消息
+ls .taskswarm/mailbox/<batchId>/supervisor/inbox/      # 未处理消息
+ls .taskswarm/mailbox/<batchId>/supervisor/ack/        # 已 ack 消息
 # 每个文件是 json：{ from, type, payload }；type ∈ notify/escalate/request/broadcast/reply
 ```
 
@@ -245,34 +245,34 @@ ls .buju/mailbox/<batchId>/supervisor/ack/        # 已 ack 消息
 
 ```bash
 git worktree list                        # 所有 worktree（_orch 之外的 <taskId> 即 lane 残留）
-git branch | grep -E 'buju/'             # lane 分支（buju/orch 是常驻的，别动）
-ls .buju/batches/ 2>/dev/null            # 历史/残留批次记录
-ls .buju/mailbox/ 2>/dev/null            # 历史/残留 mailbox
-ls .buju/worktrees/                      # _orch 之外都是 lane worktree 残留
+git branch | grep -E 'taskswarm/'             # lane 分支（taskswarm/orch 是常驻的，别动）
+ls .taskswarm/batches/ 2>/dev/null            # 历史/残留批次记录
+ls .taskswarm/mailbox/ 2>/dev/null            # 历史/残留 mailbox
+ls .taskswarm/worktrees/                      # _orch 之外都是 lane worktree 残留
 ```
 
-### 6.2 删除残留 lane 分支（安全前提：已并入 buju/orch）
+### 6.2 删除残留 lane 分支（安全前提：已并入 taskswarm/orch）
 
-`git branch -d` 只认"并入当前分支（master）"，lane 分支只并入过 `buju/orch`，所以
+`git branch -d` 只认"并入当前分支（master）"，lane 分支只并入过 `taskswarm/orch`，所以
 `-d` 会拒绝。**先逐个验证并入 orch，再 `-D`**：
 
 ```bash
 # 验证（每个分支都做；输出 MERGED 才可删）
-git merge-base --is-ancestor buju/<taskId> buju/orch && echo "MERGED: <taskId>"
+git merge-base --is-ancestor taskswarm/<taskId> taskswarm/orch && echo "MERGED: <taskId>"
 # 删除（已验证安全）
-git branch -D buju/<taskId>
+git branch -D taskswarm/<taskId>
 ```
 
-> 为什么安全：`merge-base --is-ancestor` 为真 = 该分支所有 commit 都已在 `buju/orch` 上，
+> 为什么安全：`merge-base --is-ancestor` 为真 = 该分支所有 commit 都已在 `taskswarm/orch` 上，
 > 内容不丢。批量删前先把验证结果列给 operator 看。
 
 ### 6.3 删除残留 worktree
 
 ```bash
 # 先看有没有未提交/未 commit 的活（抢救优先，见 §8.2）
-git -C .buju/worktrees/<taskId> status --short
+git -C .taskswarm/worktrees/<taskId> status --short
 # 确认无价值内容后删除
-git worktree remove --force .buju/worktrees/<taskId>
+git worktree remove --force .taskswarm/worktrees/<taskId>
 git worktree prune          # 清理登记表里的孤儿条目
 ```
 
@@ -282,7 +282,7 @@ git worktree prune          # 清理登记表里的孤儿条目
 ### 6.4 清理 mailbox
 
 ```bash
-rm -rf .buju/mailbox/<batchId>
+rm -rf .taskswarm/mailbox/<batchId>
 ```
 
 mailbox 只是 agent 间消息文件，删除无副作用（引擎结束时会 drain，崩溃残留则直接删）。
@@ -290,16 +290,16 @@ mailbox 只是 agent 间消息文件，删除无副作用（引擎结束时会 d
 ### 6.5 清理批次记录（有取舍）
 
 ```bash
-rm .buju/batches/<batchId>.json
+rm .taskswarm/batches/<batchId>.json
 ```
 
-- 删除后 `/buju-status` 回到 "No Buju batch yet"，可干净地开新批次。
-- **取舍**：dashboard 的数据源就是 `.buju/batches/*.json`——删了 = 从 dashboard 历史里
+- 删除后 `/tswarm-status` 回到 "No TaskSwarm batch yet"，可干净地开新批次。
+- **取舍**：dashboard 的数据源就是 `.taskswarm/batches/*.json`——删了 = 从 dashboard 历史里
   消失。想留审计历史就保留文件（把 phase 改成 `aborted` 更诚实，见 §7.4 第 2 步）。
 
 ### 6.6 不要动的东西
 
-- `buju/orch` 分支与 `.buju/worktrees/_orch/`——引擎基础设施，删了引擎会自动重建，
+- `taskswarm/orch` 分支与 `.taskswarm/worktrees/_orch/`——引擎基础设施，删了引擎会自动重建，
   但没必要。
 - 已 merged 任务目录的 `.DONE` / `STATUS.md` 产物、`src/` 未提交改动——不属于"残留"。
 
@@ -320,10 +320,10 @@ rm .buju/batches/<batchId>.json
 重跑失败 lane（未 done 任务默认会被重新扫描）：
 
 ```
-/buju <taskId>       # 或 buju_supervisor_control start scope=<taskId>
+/tswarm <taskId>       # 或 tswarm_supervisor_control start scope=<taskId>
 ```
 
-因为 `buju/<taskId>` 分支还在，新 worktree 会**附着旧分支**——从旧检查点续跑而非从零。
+因为 `taskswarm/<taskId>` 分支还在，新 worktree 会**附着旧分支**——从旧检查点续跑而非从零。
 
 > ⚠️ **同波 fmt 任务冲突（2026-08-14 实测）**：同波内若有 `cargo fmt --all` 类任务（全仓重排 .rs，一次可达 69 文件），与同波改 .rs 的其他任务**必然 merge 冲突**（如 external/lib.rs、main/system.rs、biz-core/scope.rs）。处置：`_orch` worktree 里对冲突文件 `git checkout --theirs -- <file>` 取 worker 功能版本 → `git add` → 完成合并 → **波末统一跑 `cargo fmt --all` 提交归一**（否则 W2 起 lane 从含混合格式的基线出发）。预防：fmt 类任务单波执行，或 File Scope 限定为 `cargo fmt --check` 实际报错的文件清单。
 
@@ -336,13 +336,13 @@ reviewer 结论为 REVISE 时 lane 进入 `review`，任务未标记 done。处�
 
 ### 7.3 abort 之后
 
-- 批次 phase=`aborted`；lane worktree 已被引擎清掉；**`buju/<taskId>` 分支残留**。
+- 批次 phase=`aborted`；lane worktree 已被引擎清掉；**`taskswarm/<taskId>` 分支残留**。
 - 处置：按 §6.2 逐个验证并入后删分支；mailbox 按 §6.4 删；批次记录保留（历史）或删。
 - 想接着干：abort 是终态，**不支持续跑**——抢救产物（§8）后按 §7.4 开新批次。
 
 ### 7.4 进程崩溃 / 重启之后（最重要的恢复场景）
 
-症状：重启后 `/buju-status` 显示批次 phase 卡在 `running`（或 planning/paused），但
+症状：重启后 `/tswarm-status` 显示批次 phase 卡在 `running`（或 planning/paused），但
 `abort`/`resume`/`pause` 都报 "No running batch"（引擎内存已空），且 supervisor 的
 `start` 会因 phase=running/planning 保护而拒绝新批次。
 
@@ -350,22 +350,22 @@ reviewer 结论为 REVISE 时 lane 进入 `review`，任务未标记 done。处�
 
 ```bash
 # ① 盘点现场：批次状态 + 残留
-cat .buju/batches/<batchId>.json        # 看哪些 lane merged / failed / running
+cat .taskswarm/batches/<batchId>.json        # 看哪些 lane merged / failed / running
 git worktree list
-git branch | grep -E 'buju/'
+git branch | grep -E 'taskswarm/'
 
 # ② 把卡住的批次状态改为 aborted（或删除记录文件）——解锁 start 保护
 #    改 json 里的 "phase": "aborted"（有终态语义，dashboard 历史也保留）
 
-# ③ 抢救有价值产物（§8）——失败/running lane 的检查点在 buju/<taskId> 分支上
+# ③ 抢救有价值产物（§8）——失败/running lane 的检查点在 taskswarm/<taskId> 分支上
 
 # ④ 清理残留：验证并入后删 lane 分支（§6.2）、删残留 worktree（§6.3）、删 mailbox（§6.4）
 
 # ⑤ 重新规划剩余工作
-/buju-plan all            # 看还剩哪些任务（failed/pending 会被重新扫描）
+/tswarm-plan all            # 看还剩哪些任务（failed/pending 会被重新扫描）
 
 # ⑥ 开新批次（scope 指定剩余任务，避免重跑已 merged 的）
-/buju <剩余任务ID...> 或 buju_supervisor_control start scope=<taskId>
+/tswarm <剩余任务ID...> 或 tswarm_supervisor_control start scope=<taskId>
 ```
 
 要点：崩溃恢复 = **先抢救、再清理、再重跑**，顺序别反（先删就丢了抢救机会）。
@@ -375,7 +375,7 @@ git branch | grep -E 'buju/'
 - **`.git/index.lock`**：git 进程被杀残留。确认无 git 在跑 → `rm .git/index.lock`（tier0_known，自动做）。
 - **`could not create lane worktree`**：旧残留阻塞。引擎已内置清理（KI-004 修复），
   仍失败就手动 `git worktree prune` + 按 §6.2/§6.3 清理同名分支/目录后重试。
-- **dashboard 启动失败**：`buju_dashboard` 提示产物未并入 → 先 `integrate`；
+- **dashboard 启动失败**：`tswarm_dashboard` 提示产物未并入 → 先 `integrate`；
   端口占用 → 引擎自动避让，或手动 `--port` 指定。
 - **worker 无工具 / 沙箱审批弹窗**：已修复（KI-002/KI-005），worker 会话自带
   full-access + 免审批；GUI 会话与全局配置不受影响。若仍出现，查 worker 工具装配。
@@ -400,10 +400,10 @@ git branch | grep -E 'buju/'
 
 ```bash
 # ① 批次 lane log：只有 "starting" 而无 worker 事件 → 疑似失联
-python3 -c "import json;d=json.load(open('.buju/batches/<batch>.json'));[print(l['lane'],l['phase'],l['log']) for l in d['lanes']]"
+python3 -c "import json;d=json.load(open('.taskswarm/batches/<batch>.json'));[print(l['lane'],l['phase'],l['log']) for l in d['lanes']]"
 # ② worktree 是否有实际提交（工作已完成 = 有提交且 status 干净）
-git -C .buju/worktrees/<taskId> log --oneline -5
-git -C .buju/worktrees/<taskId> status --short   # 空 = 已提交干净
+git -C .taskswarm/worktrees/<taskId> log --oneline -5
+git -C .taskswarm/worktrees/<taskId> status --short   # 空 = 已提交干净
 # ③ 核对产出满足 PROMPT 验收（关键产物存在 + 门禁可过：tsc -b / cargo check）
 # ④ worker 进程是否已消失
 ps aux | grep <taskId> | grep -v grep
@@ -418,7 +418,7 @@ ps aux | grep <taskId> | grep -v grep
    ```
 2. 合并分支：`integrate` 后**必须核对主干是否真包含改动**（`git log` + 关键产物），
    integrate 可能合不全甚至误报"已经是最新的"（§7.6 实测）；缺了就手动
-   `git merge buju/<taskId> --no-edit`。
+   `git merge taskswarm/<taskId> --no-edit`。
 3. 跨任务冲突：同一文件被两个任务改（如 bflow.tsx 被 JM-333 与 JM-340 同时改）时，
    冲突取"功能并集"，并清理因组件抽离产生的**未使用 import**（否则 tsc 报错）。
 4. 验证：`tsc -b` / `cargo check` / 关键产物存在 → `git commit --no-edit`。
@@ -428,7 +428,7 @@ ps aux | grep <taskId> | grep -v grep
 - `abort` 是**批次级**操作，scope 不生效，会 abort 整个批次（含未启动 lane）；误操作后用
   `resume` 恢复（aborted → running）。**无法用 abort 释放单个 lane 的调度槽**。
 - `start` 在批次 phase=running 时拒绝启动新批次。
-- 手动改 `.buju/batches/*.json` 的 lane phase：引擎内存**不重读**，无法推进调度
+- 手动改 `.taskswarm/batches/*.json` 的 lane phase：引擎内存**不重读**，无法推进调度
   （但重启引擎后会被读取——所以仍建议改，配合重启恢复，见 KI-007）。
 
 **最终恢复**：上述手段都无法让引擎推进 wave 时，唯一可靠恢复是**重启 DSH 引擎（新开会话）**
@@ -441,28 +441,28 @@ plan 继续。代码成果在手动收尾时已保住（在主干），重启无
 
 「抢救」= 从失败的 lane / 崩溃的进程里，把**已经做出来的活**捞回来并落地。
 项目先例：WEB-006（cli-integration）在批次里抢救出 dashboard server，
-`src/orchestrator/index.ts` 的 `/buju-dashboard` 即"移植自 WEB-006 的抢救实现"。
+`src/orchestrator/index.ts` 的 `/taskswarm-dashboard` 即"移植自 WEB-006 的抢救实现"。
 
 ### 8.1 抢救对象在哪
 
 | 产物位置                                    | 何时存在                   | 怎么取                                                           |
 | --------------------------------------- | ---------------------- | ------------------------------------------------------------- |
-| `buju/<taskId>` 分支上的 checkpoint commits | worker 退出/崩溃前 commit 过 | `git log --oneline buju/<taskId>`，内容在分支上                      |
-| lane worktree 里的未 commit 文件             | 崩溃前没来得及 commit         | `git -C .buju/worktrees/<taskId> status` → 先 commit/stash 再清理 |
-| `buju/orch` 上已 merged 的 lane 产物         | 波次内成功 merge 的部分        | 最终统一 `integrate`                                              |
+| `taskswarm/<taskId>` 分支上的 checkpoint commits | worker 退出/崩溃前 commit 过 | `git log --oneline taskswarm/<taskId>`，内容在分支上                      |
+| lane worktree 里的未 commit 文件             | 崩溃前没来得及 commit         | `git -C .taskswarm/worktrees/<taskId> status` → 先 commit/stash 再清理 |
+| `taskswarm/orch` 上已 merged 的 lane 产物         | 波次内成功 merge 的部分        | 最终统一 `integrate`                                              |
 
 ### 8.2 抢救步骤
 
 ```bash
 # ① 列出失败 lane 分支上的检查点
-git log --oneline buju/<taskId>
+git log --oneline taskswarm/<taskId>
 
 # ② 看产物（对比 master 或直接 checkout 到临时位置）
-git diff master buju/<taskId> --stat
+git diff master taskswarm/<taskId> --stat
 
 # ③ 选一种落地方式：
 #   a) 手动并入 orch（后续 integrate 一起落地）
-#      git -C .buju/worktrees/_orch merge --no-edit buju/<taskId>
+#      git -C .taskswarm/worktrees/_orch merge --no-edit taskswarm/<taskId>
 #   b) cherry-pick 关键 commit 到当前分支
 #      git cherry-pick <commit>
 #   c) 干脆重跑任务续接（检查点自动带上，§7.1）
@@ -470,10 +470,10 @@ git diff master buju/<taskId> --stat
 
 ### 8.3 正式落地：integrate
 
-批次完成后（或抢救产物并入 orch 后），把 `buju/orch` 合并进工作分支：
+批次完成后（或抢救产物并入 orch 后），把 `taskswarm/orch` 合并进工作分支：
 
 ```
-/buju-integrate        # = git merge --no-edit buju/orch
+/tswarm-integrate        # = git merge --no-edit taskswarm/orch
 ```
 
 这是 lane 产物（含抢救产物）进入工作树的**唯一正式入口**。destructive 分类，supervised
@@ -490,7 +490,7 @@ AI 按此判断哪些动作可以自动做、哪些要先问。
 
 | 分类                    | 包含动作                                                                                                                  | 自主度规则              |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| **diagnostic**（永远可做）  | 读 `.buju/batches/*.json`、`tasks/*/STATUS.md`、lane 日志；`git status/log/diff/worktree list`；跑测试；`buju_supervisor_status` | 全部级别直接做            |
+| **diagnostic**（永远可做）  | 读 `.taskswarm/batches/*.json`、`tasks/*/STATUS.md`、lane 日志；`git status/log/diff/worktree list`；跑测试；`tswarm_supervisor_status` | 全部级别直接做            |
 | **tier0_known**（已知恢复） | 重试失败的 merge；resume / pause；清 `.git/index.lock`；重试前清理过期 worktree                                                       | supervised 自动做     |
 | **destructive**（需确认）  | abort；integrate；`git reset / checkout -B / branch -D`；`git worktree remove`；改 STATUS/.DONE/批次状态文件；跳过任务/波次             | supervised 先征求一句确认 |
 
@@ -502,8 +502,8 @@ AI 按此判断哪些动作可以自动做、哪些要先问。
    不阻塞计划（`buildWaves`）。
 3. **依赖环**：无法分层时按剩余顺序强行成波（会显示为同一波），需人工修正任务包。
 4. **start 保护**：supervisor 的 start 在 phase=running/planning 时拒绝开新批次；
-   `/buju` 命令本身无保护——崩溃后直接 `/buju` 会开新批次撞残留，先按 §7.4 恢复。
-5. **空项目**：`start all` / `/buju all` 自动 scaffold 示例任务（EXAMPLE-001/002）。
+   `/tswarm` 命令本身无保护——崩溃后直接 `/tswarm` 会开新批次撞残留，先按 §7.4 恢复。
+5. **空项目**：`start all` / `/tswarm all` 自动 scaffold 示例任务（EXAMPLE-001/002）。
 6. **scope 语法**：`all` | 任务 ID（如 `DEMO-004`）| 路径（绝对/相对），空格分隔多 token；
    匹配任务 ID 或目录名。
 7. **重跑已完成任务**：配置 `includeDoneTasks: true` 才会扫描有 `.DONE` 的任务；否则按

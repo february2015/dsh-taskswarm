@@ -3,7 +3,7 @@
  * future dashboard read from. JSON files under `<stateRoot>/batches/`.
  * Adapted from TaskPlane's status/snapshot conventions
  * (github.com/HenryLach/taskplane, MIT License).
- * @module buju/core/status
+ * @module taskswarm/core/status
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

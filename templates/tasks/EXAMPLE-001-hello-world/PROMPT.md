@@ -7,16 +7,16 @@
 
 ## Mission
 
-Create a simple `hello-buju.md` file in the project root to verify that Buju
+Create a simple `hello-taskswarm.md` file in the project root to verify that TaskSwarm
 task execution is working correctly. This is a smoke test — if the worker can
 read this prompt, create the file, checkpoint progress, and mark the task done,
 the installation is healthy.
 
 ## Expected File Content
 
-`hello-buju.md` should include:
+`hello-taskswarm.md` should include:
 
-- A title line (for example: `# Hello from Buju`)
+- A title line (for example: `# Hello from TaskSwarm`)
 - A line containing the task ID: `EXAMPLE-001`
 - A line containing today's date
 
@@ -31,7 +31,7 @@ the installation is healthy.
 
 ## File Scope
 
-- `hello-buju.md`
+- `hello-taskswarm.md`
 
 ## Steps
 
@@ -42,12 +42,12 @@ the installation is healthy.
 
 ### Step 1: Create Hello File
 
-- [ ] Create `hello-buju.md` in the worktree root
+- [ ] Create `hello-taskswarm.md` in the worktree root
 - [ ] Add a title plus lines containing today's date and task ID `EXAMPLE-001`
 
 ### Step 2: Verification
 
-- [ ] Verify `hello-buju.md` exists and matches the expected content
+- [ ] Verify `hello-taskswarm.md` exists and matches the expected content
 
 ### Step 3: Delivery
 
@@ -55,8 +55,8 @@ the installation is healthy.
 
 ## Completion Criteria
 
-- [ ] `hello-buju.md` exists in the worktree root
-- [ ] `hello-buju.md` includes a title, task ID (`EXAMPLE-001`), and current date
+- [ ] `hello-taskswarm.md` exists in the worktree root
+- [ ] `hello-taskswarm.md` includes a title, task ID (`EXAMPLE-001`), and current date
 
 ## Git Commit Convention
 

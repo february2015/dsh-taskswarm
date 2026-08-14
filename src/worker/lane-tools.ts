@@ -4,7 +4,7 @@
  * (github.com/HenryLach/taskplane, MIT License), which registered
  * notify_supervisor / escalate_to_supervisor / request_segment_expansion /
  * review_step for every spawned worker.
- * @module buju/worker/lane-tools
+ * @module taskswarm/worker/lane-tools
  */
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
@@ -34,7 +34,7 @@ export interface LaneRuntime {
 /** Mission text handed to a worker agent. */
 export function buildWorkerMission(taskDir: string, worktree: string, lane: number, taskId: string): string {
   return [
-    `You are a Buju worker (lane ${lane}) executing task ${taskId} in an isolated git worktree.`,
+    `You are a TaskSwarm worker (lane ${lane}) executing task ${taskId} in an isolated git worktree.`,
     `- Worktree (cwd, where code changes go): ${worktree}`,
     `- Task packet: ${taskDir}/PROMPT.md (mission, steps, constraints) and ${taskDir}/STATUS.md (progress).`,
     'Drive the task with the task_runner tool: `show` to read the packet, `advance` to tick the next',
@@ -53,7 +53,7 @@ export function registerLaneTools(ctx: { tools: { register(def: unknown): unknow
 
   ctx.tools.register(defineTool({
     name: 'task_runner',
-    description: 'Drive the Buju task packet: show (read PROMPT/STATUS), advance (tick the next checkbox of a step and checkpoint-commit), done (mark complete), blocked (report a blocker), amend (add an amendment), log (append an execution-log row).',
+    description: 'Drive the TaskSwarm task packet: show (read PROMPT/STATUS), advance (tick the next checkbox of a step and checkpoint-commit), done (mark complete), blocked (report a blocker), amend (add an amendment), log (append an execution-log row).',
     parameters: {
       action: {
         type: 'string',
@@ -95,7 +95,7 @@ export function registerLaneTools(ctx: { tools: { register(def: unknown): unknow
               : packet.steps.find((s) => s.items.some((i) => !i.checked)) ?? packet.steps[packet.steps.length - 1]
             if (!step) return { ok: false, text: 'task has no steps' }
             const result = advanceStep(packet, step.index)
-            const cp = checkpointCommit(lane.worktree, `buju: ${taskId} advance step ${step.index} ${message ? `— ${message}` : ''}`)
+            const cp = checkpointCommit(lane.worktree, `taskswarm: ${taskId} advance step ${step.index} ${message ? `— ${message}` : ''}`)
             appendExecutionLog(lane.taskDir, `advance step ${step.index}`, cp.summary)
             return {
               ok: true,
@@ -106,7 +106,7 @@ export function registerLaneTools(ctx: { tools: { register(def: unknown): unknow
           }
           case 'done': {
             markTaskDone(lane.taskDir)
-            const cp = checkpointCommit(lane.worktree, `buju: ${taskId} done${message ? ` — ${message}` : ''}`)
+            const cp = checkpointCommit(lane.worktree, `taskswarm: ${taskId} done${message ? ` — ${message}` : ''}`)
             appendExecutionLog(lane.taskDir, 'done', cp.summary)
             return { ok: true, text: `Task ${taskId} marked done. Checkpoint: ${cp.summary}` }
           }

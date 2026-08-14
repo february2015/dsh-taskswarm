@@ -17,7 +17,7 @@
  *   **Current Step:** <name>
  *   ### Step N: Title / **Status:** ⬜|🟢|✅
  *   ## Execution Log  (| timestamp | action | outcome |)
- * @module buju/core/task
+ * @module taskswarm/core/task
  */
 import { readFileSync, writeFileSync, existsSync, mkdirSync, appendFileSync } from 'node:fs'
 import { join, basename } from 'node:path'

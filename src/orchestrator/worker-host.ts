@@ -6,10 +6,10 @@
  *   - `in-process` (default): `ctx.agents.create()` inside the orchestrator
  *     process, per-agent cwd = lane worktree, bridge tools registered on the
  *     agent's scoped context.
- *   - `headless`: spawn `dsh --profile buju-worker <mission>` as a child
+ *   - `headless`: spawn `dsh --profile taskswarm-worker <mission>` as a child
  *     process with the lane environment (worktree cwd, mailbox, state root).
- *     The `buju-worker` profile composes dsh-base + the worker bundle.
- * @module buju/orchestrator/worker-host
+ *     The `taskswarm-worker` profile composes dsh-base + the worker bundle.
+ * @module taskswarm/orchestrator/worker-host
  */
 import { spawn } from 'node:child_process'
 import type { TaskPacket } from '../core/task.ts'
@@ -42,8 +42,8 @@ export interface WorkerHost {
 }
 
 /**
- * Backend that shells out to a `dsh --profile buju-worker` process per lane.
- * The worker bundle (dsh-buju/worker) provides startup + runner + bridge tools.
+ * Backend that shells out to a `dsh --profile taskswarm-worker` process per lane.
+ * The worker bundle (taskswarm/worker) provides startup + runner + bridge tools.
  */
 export class HeadlessWorkerHost implements WorkerHost {
   readonly kind = 'headless'
@@ -53,12 +53,12 @@ export class HeadlessWorkerHost implements WorkerHost {
 
   constructor(options: { dshBin?: string; profile?: string } = {}) {
     this.dshBin = options.dshBin ?? 'dsh'
-    this.profile = options.profile ?? 'buju-worker'
+    this.profile = options.profile ?? 'taskswarm-worker'
   }
 
   spawn(spec: LaneSpec): Promise<WorkerResult> {
     const mission = [
-      `You are a Buju worker (lane ${spec.lane}) executing task ${spec.task.id} in an isolated git worktree.`,
+      `You are a TaskSwarm worker (lane ${spec.lane}) executing task ${spec.task.id} in an isolated git worktree.`,
       `Use the task_runner tool to drive steps (show/advance/done), review_step at step boundaries,`,
       `and notify_supervisor / escalate_to_supervisor to talk to the supervisor.`,
       `Worktree: ${spec.worktree}. Task folder: ${spec.task.folder}.`,
@@ -67,14 +67,14 @@ export class HeadlessWorkerHost implements WorkerHost {
     return new Promise<WorkerResult>((resolve) => {
       const env: Record<string, string> = {
         ...process.env,
-        BUJU_WORKER_TASK_DIR: spec.task.folder,
-        BUJU_WORKER_WORKTREE: spec.worktree,
-        BUJU_WORKER_BATCH_ID: spec.batchId,
-        BUJU_WORKER_STATE_ROOT: spec.stateRoot,
-        BUJU_WORKER_LANE: String(spec.lane),
-        BUJU_WORKER_REPO_ROOT: spec.repoRoot,
-        ...(spec.model ? { BUJU_WORKER_MODEL: spec.model } : {}),
-        ...(spec.reviewerModel ? { BUJU_WORKER_REVIEWER_MODEL: spec.reviewerModel } : {}),
+        TASKSWARM_WORKER_TASK_DIR: spec.task.folder,
+        TASKSWARM_WORKER_WORKTREE: spec.worktree,
+        TASKSWARM_WORKER_BATCH_ID: spec.batchId,
+        TASKSWARM_WORKER_STATE_ROOT: spec.stateRoot,
+        TASKSWARM_WORKER_LANE: String(spec.lane),
+        TASKSWARM_WORKER_REPO_ROOT: spec.repoRoot,
+        ...(spec.model ? { TASKSWARM_WORKER_MODEL: spec.model } : {}),
+        ...(spec.reviewerModel ? { TASKSWARM_WORKER_REVIEWER_MODEL: spec.reviewerModel } : {}),
         ...(spec.env ?? {}),
       }
       const proc = spawn(this.dshBin, ['--profile', this.profile, mission], {

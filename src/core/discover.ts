@@ -6,7 +6,7 @@
  * A wave is a set of tasks whose dependencies are all satisfied by earlier
  * waves; tasks within one wave run in parallel lanes. Waves are computed by
  * topological layering over the dependency DAG.
- * @module buju/core/discover
+ * @module taskswarm/core/discover
  */
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, isAbsolute, resolve } from 'node:path'

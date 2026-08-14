@@ -3,7 +3,7 @@
  * registry inside the orchestrator process (the default host for the web
  * profile). Replaces TaskPlane's `pi --mode rpc` subprocess spawn
  * (extensions/taskplane/agent-host.ts, github.com/HenryLach/taskplane, MIT).
- * @module buju/orchestrator/in-process-host
+ * @module taskswarm/orchestrator/in-process-host
  */
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'
@@ -90,7 +90,7 @@ export class InProcessWorkerHost implements WorkerHost {
 
   abort(lane: number): void {
     const agent = this.running.get(lane)
-    if (agent) void agent.cancel?.('buju-abort')
+    if (agent) void agent.cancel?.('taskswarm-abort')
   }
 }
 

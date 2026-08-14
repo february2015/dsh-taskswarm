@@ -1,13 +1,13 @@
-# dsh-buju bundle patch — mounts the Buju orchestrator on any profile that
+# taskswarm bundle patch — mounts the TaskSwarm orchestrator on any profile that
 # composes the base services (commands, tools, agents).
 #
-# Add "dsh-buju" to the profile's dsh.profile.bundles to activate /orch-family
+# Add "taskswarm" to the profile's dsh.profile.bundles to activate /orch-family
 # commands. Config overrides can be layered here, e.g.:
 #
-#   - id: buju-orchestrator
+#   - id: taskswarm-orchestrator
 #     config:
 #       tasksRoot: docs/task-management
 #
 - insert:
-    - id: buju-orchestrator
-      name: 'dsh-buju/orchestrator'
+    - id: taskswarm-orchestrator
+      name: 'dsh-taskswarm/orchestrator'

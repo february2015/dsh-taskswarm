@@ -41,7 +41,7 @@ function escapeHtml(str) {
 }
 
 /**
- * dsh-buju batch phase → dashboard (TaskPlane) vocabulary.
+ * taskswarm batch phase → dashboard (TaskPlane) vocabulary.
  *
  * dsh persists the BatchPhase as 'running' / 'complete' while the ported
  * renderers switch on 'executing' / 'completed' (progress bar "done" state,

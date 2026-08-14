@@ -10,7 +10,7 @@
  *     supervisor/ack/
  *     <lane>/outbox/             ← worker outbound copies
  *     broadcast/                 ← supervisor → all lanes
- * @module buju/core/mailbox
+ * @module taskswarm/core/mailbox
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'node:fs'

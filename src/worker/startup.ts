@@ -1,18 +1,18 @@
 /**
- * Buju worker startup provider — publishes the lane environment as a Cordis
+ * TaskSwarm worker startup provider — publishes the lane environment as a Cordis
  * service. The worker runner consumes it; values come from environment
  * variables set by the orchestrator's HeadlessWorkerHost.
  * Mirrors `@deepseek-ai/dsh-headless/startup` (DeepSeek Harness, MIT).
- * @module buju/worker/startup
+ * @module taskswarm/worker/startup
  */
 import type { Context } from '@deepseek-ai/cordis'
 
-export const name = 'buju-worker-startup'
+export const name = 'taskswarm-worker-startup'
 
 /** Service provided by this plugin and injected by the worker runner. */
-export const BUJU_WORKER_STARTUP_SERVICE = 'bujuWorkerStartup'
+export const TASKSWARM_WORKER_STARTUP_SERVICE = 'taskswarmWorkerStartup'
 
-export interface BujuWorkerStartupValues {
+export interface TaskSwarmWorkerStartupValues {
   taskDir: string
   worktree: string
   batchId: string
@@ -28,16 +28,16 @@ function env(name: string): string {
 }
 
 export function apply(ctx: Context): void {
-  const lane = Number(env('BUJU_WORKER_LANE'))
-  const startup: BujuWorkerStartupValues = {
-    taskDir: env('BUJU_WORKER_TASK_DIR'),
-    worktree: env('BUJU_WORKER_WORKTREE'),
-    batchId: env('BUJU_WORKER_BATCH_ID'),
-    stateRoot: env('BUJU_WORKER_STATE_ROOT'),
-    repoRoot: env('BUJU_WORKER_REPO_ROOT'),
+  const lane = Number(env('TASKSWARM_WORKER_LANE'))
+  const startup: TaskSwarmWorkerStartupValues = {
+    taskDir: env('TASKSWARM_WORKER_TASK_DIR'),
+    worktree: env('TASKSWARM_WORKER_WORKTREE'),
+    batchId: env('TASKSWARM_WORKER_BATCH_ID'),
+    stateRoot: env('TASKSWARM_WORKER_STATE_ROOT'),
+    repoRoot: env('TASKSWARM_WORKER_REPO_ROOT'),
     lane: Number.isFinite(lane) && lane > 0 ? lane : 1,
-    ...(env('BUJU_WORKER_MODEL') ? { model: env('BUJU_WORKER_MODEL') } : {}),
-    ...(env('BUJU_WORKER_REVIEWER_MODEL') ? { reviewerModel: env('BUJU_WORKER_REVIEWER_MODEL') } : {}),
+    ...(env('TASKSWARM_WORKER_MODEL') ? { model: env('TASKSWARM_WORKER_MODEL') } : {}),
+    ...(env('TASKSWARM_WORKER_REVIEWER_MODEL') ? { reviewerModel: env('TASKSWARM_WORKER_REVIEWER_MODEL') } : {}),
   }
-  ctx.provide(BUJU_WORKER_STARTUP_SERVICE, startup)
+  ctx.provide(TASKSWARM_WORKER_STARTUP_SERVICE, startup)
 }

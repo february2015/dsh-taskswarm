@@ -10,8 +10,8 @@
  * This module mounts the minimal standard tool set (bash, fs, fs-search,
  * str-replace-editor) directly on an agent-scoped context, and no-ops when the
  * ambient profile already provides them (plain `dsh-base` profiles like
- * `buju-worker` / `buju-verify`), avoiding duplicate registration.
- * @module buju/worker/worker-tools
+ * `taskswarm-worker` / `taskswarm-verify`), avoiding duplicate registration.
+ * @module taskswarm/worker/worker-tools
  */
 import type { Context } from '@deepseek-ai/cordis'
 import * as toolBash from '@deepseek-ai/dsh-tool-bash'

@@ -1,6 +1,6 @@
 # Known Issues
 
-> This file documents known but not-yet-fixed issues in dsh-buju. Each entry covers the symptom, root cause, relevant code locations, and candidate fix approaches.
+> This file documents known but not-yet-fixed issues in taskswarm. Each entry covers the symptom, root cause, relevant code locations, and candidate fix approaches.
 > Rule: after a fix, move the entry to the `RESOLVED` section and note the fixing version/commit.
 
 ## OPEN
@@ -35,7 +35,7 @@
 - **Discovered:** 2026-08-14 (discussed with the user after batch `b-msrtvf7c-cea399` ran through)
 - **Gap (original):** TaskPlane had a conversational supervisor agent sharing the chat session with
   the operator, reporting worker progress in real time and requesting confirmation; when porting to
-  Buju, only the mailbox storage was ported, and `engine.ts` merely drained and discarded messages
+  TaskSwarm, only the mailbox storage was ported, and `engine.ts` merely drained and discarded messages
   via `drainInbox` at the end — users could only check manually via `/orch-status`.
 - **Implementation (v0.1.1 workspace, effective after restart):** `src/orchestrator/supervisor.ts`
   (a port of TaskPlane's supervisor.ts, adapted to DSH):
@@ -44,7 +44,7 @@
     whether to ask the operator for confirmation first is decided by the autonomy level
     (interactive / supervised / autonomous)
   - The session agent is the supervisor: a supervisor system prompt plus two tools are injected
-    (`buju_supervisor_status` for diagnostics, `buju_supervisor_control` for control)
+    (`tswarm_supervisor_status` for diagnostics, `tswarm_supervisor_control` for control)
   - The engine emits structured events (batch-started / lane-failed / lane-revise /
     batch-complete / batch-aborted); decision-type events **wake up** the session agent
     (`followup`), which verifies the facts → classifies the action → executes it or asks the
@@ -65,11 +65,11 @@
 
 - **Status:** ✅ Fixed (in source; `src/core/worktree.ts` `createLaneWorktree`)
 - **Discovered:** 2026-08-14 (every lane of new batch `b-msrtspik-47088e` failed with `could not create lane worktree`)
-- **Symptom:** after the old batch's process is killed, the `buju/<taskId>` branch and lane worktree
-  directories are left behind; the new batch's `git worktree add -b buju/<taskId>` fails because the
+- **Symptom:** after the old batch's process is killed, the `taskswarm/<taskId>` branch and lane worktree
+  directories are left behind; the new batch's `git worktree add -b taskswarm/<taskId>` fails because the
   branch already exists, and all lanes fail instantly.
 - **Fix description:** `createLaneWorktree` now removes leftover worktree directories first
-  (falling back to `prune` on failure), and when the `buju/<taskId>` branch already exists it uses
+  (falling back to `prune` on failure), and when the `taskswarm/<taskId>` branch already exists it uses
   `git worktree add <branch> <dir>` (attaching to the existing branch) instead of `-b` (creating a
   new one). Takes effect after the next dsh web restart.
 - **Notes:** the worktrees/branches of failed lanes are still kept for troubleshooting (existing
@@ -103,11 +103,11 @@
 1. The GUI sidebar groups by **Host Workspace** (`@deepseek-ai/dsh-client-ui-workspace`): a
    session's group is determined by the `cwd` in its header (`sessionIds` in `dsh-workspace` =
    `host.sessionPath(id) === record.path`).
-2. A Buju worker session's `cwd` is the lane worktree (`.buju/worktrees/<taskId>`), a transient
+2. A TaskSwarm worker session's `cwd` is the lane worktree (`.taskswarm/worktrees/<taskId>`), a transient
    git worktree with no corresponding workspace record → all worker sessions fall into the
    "Ungrouped" fallback bucket (`stray` in `groupByWorkspace`).
 3. DSH has built-in **automatic hiding of subagent sessions**: the sidebar's `sessionVisible()`
-   filters on `session.origin !== 'subagent'`. Buju didn't pass `meta.origin: 'subagent'` when
+   filters on `session.origin !== 'subagent'`. TaskSwarm didn't pass `meta.origin: 'subagent'` when
    creating agents, so these internal sessions were exposed in the list.
 
 #### Relevant code locations
@@ -128,7 +128,7 @@
   sessions are automatically hidden from the sidebar (consistent with their "internal executor"
   role); progress can be watched via `/orch-status` or the future dashboard.
   - Trade-off: worker sessions are no longer visible/clickable in the GUI (you can't watch a
-    worker from the sidebar), but in-process logs and `.buju` state remain.
+    worker from the sidebar), but in-process logs and `.taskswarm` state remain.
   - Prerequisites: `npm run build` + restart the dsh web process; this interrupts an in-flight
     batch (the in-process host depends on the web process staying alive).
 - **Option B (keep current behavior):** don't hide them and accept "Ungrouped"; suited to
@@ -140,15 +140,15 @@
 
 #### Repro steps
 
-1. `cd ~/myProject/dsh-buju && npm run build`
-2. In a dsh web session: `/buju-init` → `/orch all`
+1. `cd ~/myProject/taskswarm && npm run build`
+2. In a dsh web session: `/tswarm-init` → `/orch all`
 3. Watch the sidebar: `session-<uuid>` sessions appear under "Ungrouped"
    (count = active workers + reviewer)
 
 #### Notes
 
 - This issue doesn't affect batch execution correctness (`b-msrszf33-d79cf6` ran normally, with
-  lane state written to `.buju/batches/`); it's purely a UX issue.
+  lane state written to `.taskswarm/batches/`); it's purely a UX issue.
 - Related to the WEB-005/WEB-006 dashboard plans: once the dashboard ships, worker progress will
   have a proper visualization entry point, making Option A's hiding trade-off cheaper.
 
@@ -177,7 +177,7 @@
   output files** since the batch started (no `dashboard/`).
 - The main repo's STATUS.md stayed at "Current Step: Preflight / Not Started", with no progress
   for 6 minutes after the last worker message.
-- For comparison: in the sandbox verification with `dsh --profile buju-verify` documented in the
+- For comparison: in the sandbox verification with `dsh --profile taskswarm-verify` documented in the
   README, the in-process worker could create files normally (under that profile the worker has
   tools).
 
@@ -190,7 +190,7 @@
   calls `registerLaneTools(agentCtx, lane)` and never mounts bash/file tool plugins onto the
   worker scope.
 - DSH's tool inheritance for agent scopes behaves differently between the web profile and the
-  buju-verify sandbox profile: under the sandbox profile the worker got the tools, under the web
+  taskswarm-verify sandbox profile: under the sandbox profile the worker got the tools, under the web
   profile it didn't (agent scopes don't inherit the per-session tool assembly of the GUI session).
 
 #### Relevant code locations
@@ -206,15 +206,15 @@
 - **Option A (recommended):** in the `setup` of `InProcessWorkerHost.spawn()`, mount standard tool
   plugins such as bash / filesystem alongside `registerLaneTools` (following the headless assembly
   in `src/worker/runner.ts`), so the in-process and headless toolsets stay identical.
-- **Option B:** default to `host: headless` (a `dsh --profile buju-worker` subprocess with the
+- **Option B:** default to `host: headless` (a `dsh --profile taskswarm-worker` subprocess with the
   full toolset built in).
 - **Option C:** investigate the agent-scope tool inheritance mechanism under the web profile and
   fix it on the DSH side (if it's a framework behavior difference).
 
 #### Repro steps
 
-1. In a web profile (GUI) session: `/buju-init` → `/orch all`
-2. Watch the mailbox (`.buju/mailbox/<batch>/supervisor/inbox/`): the worker escalates with
+1. In a web profile (GUI) session: `/tswarm-init` → `/orch all`
+2. Watch the mailbox (`.taskswarm/mailbox/<batch>/supervisor/inbox/`): the worker escalates with
    "Missing shell/file tooling"
 3. Check the lane worktree: no output at all
 
@@ -239,7 +239,7 @@
 
 #### Symptom
 
-- With 2 concurrent lanes (wave-1), the on-disk `.buju/batches/*.json` shows lane 1 (WEB-001) as
+- With 2 concurrent lanes (wave-1), the on-disk `.taskswarm/batches/*.json` shows lane 1 (WEB-001) as
   `pending` with no worktree, even though its worktree `web-001` was actually created and the
   worker session is alive.
 - `/orch-status` / the dashboard would therefore show incorrect lane status.
@@ -277,7 +277,7 @@
 
 1. Two tasks with no dependencies (two lanes in wave-1)
 2. `/orch all`
-3. Read `.buju/batches/*.json`: the lane that started first may show pending/no worktree even
+3. Read `.taskswarm/batches/*.json`: the lane that started first may show pending/no worktree even
    though its worktree already exists
 
 #### Notes

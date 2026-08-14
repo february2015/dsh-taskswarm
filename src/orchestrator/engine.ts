@@ -1,5 +1,5 @@
 /**
- * Buju engine — wave/lane execution.
+ * TaskSwarm engine — wave/lane execution.
  * Adapted from TaskPlane's orchestrator (waves.ts / lane-runner.ts /
  * execution.ts, github.com/HenryLach/taskplane, MIT License). Cordis-free:
  * DSH services arrive through the `WorkerHost` seam, so the engine is
@@ -10,7 +10,7 @@
  * they take effect at wave boundaries; abort also kills running lanes via the
  * host. Task packets (PROMPT.md/STATUS.md) live in the main repo's tasks
  * root; lane worktrees are where workers make code changes.
- * @module buju/orchestrator/engine
+ * @module taskswarm/orchestrator/engine
  */
 import { randomUUID } from 'node:crypto'
 import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
@@ -30,7 +30,7 @@ import { runGit } from '../core/git.ts'
 import { SUPERVISOR_SESSION, drainInbox, sessionInboxDir, writeMailboxMessage } from '../core/mailbox.ts'
 import type { WorkerHost, LaneSpec, WorkerResult } from './worker-host.ts'
 
-export interface BujuEvent {
+export interface TaskSwarmEvent {
   type: 'batch-started' | 'lane-done' | 'lane-failed' | 'lane-revise' | 'wave-complete' | 'batch-complete' | 'batch-aborted'
   batchId: string
   /** Present on lane events. */
@@ -60,7 +60,7 @@ export interface EngineConfig {
    *  0/缺省 = 不启用（不建议，会退回"只能重启引擎"的假死状态）。 */
   laneTimeoutMinutes?: number
   /** Structured batch-lifecycle events + the owning session agent (who started the batch). */
-  onEvent?: (event: BujuEvent, owner?: unknown) => void
+  onEvent?: (event: TaskSwarmEvent, owner?: unknown) => void
 }
 
 export interface RunHandle {
@@ -75,7 +75,7 @@ interface RunContext {
   aborted: boolean
 }
 
-export class BujuEngine {
+export class TaskSwarmEngine {
   private readonly active = new Map<string, RunContext>()
   /** batchId → 发起该 batch 的会话 agent（事件只回发给它，避免跨会话串消息）。 */
   private readonly batchOwners = new Map<string, unknown>()
@@ -83,7 +83,7 @@ export class BujuEngine {
   constructor(private readonly config: EngineConfig) {}
 
   /** Fire a structured lifecycle event through the configured hook (non-fatal). */
-  private emit(event: BujuEvent): void {
+  private emit(event: TaskSwarmEvent): void {
     try {
       this.config.onEvent?.(event, this.batchOwners.get(event.batchId))
     } catch {
@@ -281,7 +281,7 @@ export class BujuEngine {
     if (result.error) lane.error = result.error
     laneLog(lane, `worker exited ${result.exitCode}${result.error ? ` (${result.error})` : ''}`)
 
-    checkpointCommit(wt.dir, `buju: ${task.id} worker exit`)
+    checkpointCommit(wt.dir, `taskswarm: ${task.id} worker exit`)
     const verdict = this.readLatestVerdict(task.folder)
     lane.reviewVerdict = verdict
 
@@ -355,7 +355,7 @@ export class BujuEngine {
           // best-effort
         }
         laneLog(lane, `lane timeout after ${timeoutMin} min (watchdog)`)
-        resolve({ exitCode: 1, text: '', error: `lane timeout after ${timeoutMin} min（worker 无完成事件，看门狗强制结束；检查点保留在 buju/${spec.task.id} 分支）` })
+        resolve({ exitCode: 1, text: '', error: `lane timeout after ${timeoutMin} min（worker 无完成事件，看门狗强制结束；检查点保留在 taskswarm/${spec.task.id} 分支）` })
       }, timeoutMs)
     })
     try {
@@ -443,7 +443,7 @@ export class BujuEngine {
 
   /** Merge the orch branch into the current branch (integration). */
   integrate(): { ok: boolean; message: string } {
-    const result = runGit(['merge', '--no-edit', 'buju/orch'], this.config.repoRoot)
+    const result = runGit(['merge', '--no-edit', 'taskswarm/orch'], this.config.repoRoot)
     return result.ok ? { ok: true, message: result.stdout } : { ok: false, message: result.stderr }
   }
 

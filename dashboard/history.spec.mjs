@@ -27,7 +27,7 @@ import { tmpdir } from 'node:os'
 import { listHistory, getHistoryEntry, registerExtra } from './history.mjs'
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'buju-web004-'))
+  return mkdtempSync(join(tmpdir(), 'taskswarm-web004-'))
 }
 
 function cleanup(root) {
@@ -64,7 +64,7 @@ function writeBatch(stateRoot, id, overrides = {}) {
 test('listHistory: compact fields, newest-first sort, corrupt files skipped', () => {
   const root = tmp()
   try {
-    const stateRoot = join(root, '.buju')
+    const stateRoot = join(root, '.taskswarm')
     writeBatch(stateRoot, 'b-old', { startedAt: '2026-08-13T10:00:00.000Z' })
     writeBatch(stateRoot, 'b-new', {
       startedAt: '2026-08-13T12:00:00.000Z',
@@ -106,7 +106,7 @@ test('listHistory: compact fields, newest-first sort, corrupt files skipped', ()
 test('listHistory: status derivation — partial / failed / aborted / running', () => {
   const root = tmp()
   try {
-    const stateRoot = join(root, '.buju')
+    const stateRoot = join(root, '.taskswarm')
     writeBatch(stateRoot, 'b-partial', {
       phase: 'complete',
       lanes: [
@@ -153,7 +153,7 @@ test('listHistory: empty / missing stateRoot is a safe no-op', () => {
 test('getHistoryEntry: full BatchState plus summary superset', () => {
   const root = tmp()
   try {
-    const stateRoot = join(root, '.buju')
+    const stateRoot = join(root, '.taskswarm')
     writeBatch(stateRoot, 'b-1')
 
     const entry = getHistoryEntry(stateRoot, 'b-1')
@@ -181,7 +181,7 @@ test('getHistoryEntry: full BatchState plus summary superset', () => {
 test('getHistoryEntry: null for missing batch and invalid/traversal ids', () => {
   const root = tmp()
   try {
-    const stateRoot = join(root, '.buju')
+    const stateRoot = join(root, '.taskswarm')
     writeBatch(stateRoot, 'b-1')
     assert.equal(getHistoryEntry(stateRoot, 'no-such-batch'), null)
     assert.equal(getHistoryEntry(stateRoot, '../b-1'), null)
@@ -266,7 +266,7 @@ function invoke(router, method, path, body) {
 
 function setupFixture() {
   const root = tmp()
-  const stateRoot = join(root, '.buju')
+  const stateRoot = join(root, '.taskswarm')
   const tasksRoot = join(root, 'tasks')
   writeBatch(stateRoot, 'b-1', {
     lanes: [
@@ -375,7 +375,7 @@ test('/api/status-md: lane.worktree first, tasksRoot fallback, 404 unknown, 400 
 test('/api/status-md: dashboard-state shape (state.batch.lanes) also resolves', () => {
   const root = tmp()
   try {
-    const stateRoot = join(root, '.buju')
+    const stateRoot = join(root, '.taskswarm')
     const worktreeDir = join(root, 'worktrees', 'task-x')
     mkdirSync(worktreeDir, { recursive: true })
     writeFileSync(join(worktreeDir, 'STATUS.md'), '# dashboard-shape lane status\n')
@@ -400,7 +400,7 @@ test('/api/status-md: dashboard-state shape (state.batch.lanes) also resolves', 
 test('/api/preferences: default {theme:dark}, POST merges, GET round-trips, file persisted', () => {
   const root = tmp()
   try {
-    const ctx = { stateRoot: join(root, '.buju') }
+    const ctx = { stateRoot: join(root, '.taskswarm') }
     const router = createRouterDouble()
     registerExtra(router, ctx)
 

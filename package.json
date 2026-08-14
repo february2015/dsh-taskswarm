@@ -1,7 +1,7 @@
 {
-  "name": "dsh-buju",
-  "version": "0.1.1",
-  "description": "Buju (布局) — multi-agent task orchestration for DeepSeek Harness. Native port of TaskPlane (github.com/HenryLach/taskplane, MIT): waves/lanes parallel execution, git worktree isolation, PROMPT.md/STATUS.md task packets, file mailbox, cross-model review.",
+  "name": "dsh-taskswarm",
+  "version": "0.2.1",
+  "description": "TaskSwarm (布局) — multi-agent task orchestration for DeepSeek Harness. Native port of TaskPlane (github.com/HenryLach/taskplane, MIT): waves/lanes parallel execution, git worktree isolation, PROMPT.md/STATUS.md task packets, file mailbox, cross-model review.",
   "keywords": [
     "deepseek-harness",
     "dsh",
@@ -9,7 +9,7 @@
     "multi-agent",
     "task-runner",
     "parallel",
-    "buju"
+    "taskswarm"
   ],
   "type": "module",
   "main": "lib/orchestrator/index.js",
@@ -64,7 +64,7 @@
     }
   },
   "bin": {
-    "buju-dashboard": "./dashboard/server.mjs"
+    "taskswarm-dashboard": "./dashboard/server.mjs"
   },
   "scripts": {
     "build": "tsc -p tsconfig.json",

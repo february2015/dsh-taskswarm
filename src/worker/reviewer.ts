@@ -3,7 +3,7 @@
  * different model route) that inspects the lane worktree diff and returns a
  * PASS / REVISE verdict. Replaces TaskPlane's reviewer extension
  * (github.com/HenryLach/taskplane, MIT License) with DSH-native agents.
- * @module buju/worker/reviewer
+ * @module taskswarm/worker/reviewer
  */
 import { randomUUID } from 'node:crypto'
 import type { Context } from '@deepseek-ai/cordis'

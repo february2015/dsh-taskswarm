@@ -20,16 +20,16 @@ import { createRouter, registerCore, createServer } from './server.mjs'
 // ─── Fixtures / helpers ──────────────────────────────────────────────────────
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'buju-web003-'))
+  return mkdtempSync(join(tmpdir(), 'taskswarm-web003-'))
 }
 
 function cleanup(root) {
   rmSync(root, { recursive: true, force: true })
 }
 
-/** Write a BatchState JSON under `<root>/.buju/batches/`. */
+/** Write a BatchState JSON under `<root>/.taskswarm/batches/`. */
 function writeBatchState(root, state) {
-  const dir = join(root, '.buju', 'batches')
+  const dir = join(root, '.taskswarm', 'batches')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${state.id}.json`), JSON.stringify(state, null, 2), 'utf-8')
 }
@@ -39,7 +39,7 @@ function makeBatchState(root) {
     id: 'b-server-test',
     repoRoot: root,
     tasksRoot: join(root, 'tasks'),
-    stateRoot: join(root, '.buju'),
+    stateRoot: join(root, '.taskswarm'),
     phase: 'running',
     scope: 'ALPHA-001',
     startedAt: '2026-08-13T10:00:00.000Z',
@@ -141,9 +141,9 @@ test('router: :param pattern routes populate ctx.params', async (t) => {
 test('registerCore: health 200, state batch:null, static index, unknown 404', async (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
-  mkdirSync(join(root, '.buju', 'batches'), { recursive: true })
+  mkdirSync(join(root, '.taskswarm', 'batches'), { recursive: true })
 
-  const ctx = { stateRoot: join(root, '.buju'), tasksRoot: join(root, 'tasks') }
+  const ctx = { stateRoot: join(root, '.taskswarm'), tasksRoot: join(root, 'tasks') }
   const router = createRouter()
   registerCore(router, ctx)
   const server = createServer(router, ctx)
@@ -165,12 +165,12 @@ test('registerCore: health 200, state batch:null, static index, unknown 404', as
   assert.deepEqual(stateJson.sessions, [])
   assert.equal(typeof stateJson.timestamp, 'number')
 
-  // Static: / → index.html contains "Buju Dashboard".
+  // Static: / → index.html contains "TaskSwarm Dashboard".
   const index = await fetch(`${base}/`)
   assert.equal(index.status, 200)
   assert.match(index.headers.get('content-type'), /text\/html/)
   const html = await index.text()
-  assert.ok(html.includes('Buju Dashboard'), 'index.html contains Buju Dashboard')
+  assert.ok(html.includes('TaskSwarm Dashboard'), 'index.html contains TaskSwarm Dashboard')
 
   // Static: app.js served with JS mime.
   const appjs = await fetch(`${base}/app.js`)
@@ -195,13 +195,13 @@ test('registerCore: health 200, state batch:null, static index, unknown 404', as
   assert.match(preflight.headers.get('access-control-allow-methods'), /POST/)
 })
 
-test('registerCore: /api/state reflects a real batch from .buju/batches', async (t) => {
+test('registerCore: /api/state reflects a real batch from .taskswarm/batches', async (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
   mkdirSync(join(root, 'tasks'), { recursive: true })
   writeBatchState(root, makeBatchState(root))
 
-  const ctx = { stateRoot: join(root, '.buju'), tasksRoot: join(root, 'tasks') }
+  const ctx = { stateRoot: join(root, '.taskswarm'), tasksRoot: join(root, 'tasks') }
   const router = createRouter()
   registerCore(router, ctx)
   const server = createServer(router, ctx)
@@ -214,7 +214,7 @@ test('registerCore: /api/state reflects a real batch from .buju/batches', async 
 })
 
 test('registerCore: path traversal cannot escape public/', async (t) => {
-  const ctx = { stateRoot: join(tmp(), '.buju') }
+  const ctx = { stateRoot: join(tmp(), '.taskswarm') }
   const router = createRouter()
   registerCore(router, ctx)
   const server = createServer(router, ctx)
@@ -237,7 +237,7 @@ test('registerCore: path traversal cannot escape public/', async (t) => {
   // Either 403 (guard) or 404 (normalized to /package.json, absent from
   // public/) — never the workspace package.json itself.
   assert.ok([403, 404].includes(body.status), `status ${body.status}`)
-  assert.ok(!body.body.includes('"dsh-buju"'), 'workspace package.json leaked')
+  assert.ok(!body.body.includes('"taskswarm"'), 'workspace package.json leaked')
 })
 
 // ─── SSE ─────────────────────────────────────────────────────────────────────
@@ -245,9 +245,9 @@ test('registerCore: path traversal cannot escape public/', async (t) => {
 test('SSE: initial data frame pushed immediately on connect', async (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
-  mkdirSync(join(root, '.buju', 'batches'), { recursive: true })
+  mkdirSync(join(root, '.taskswarm', 'batches'), { recursive: true })
 
-  const ctx = { stateRoot: join(root, '.buju'), tasksRoot: join(root, 'tasks') }
+  const ctx = { stateRoot: join(root, '.taskswarm'), tasksRoot: join(root, 'tasks') }
   const router = createRouter()
   registerCore(router, ctx)
   const server = createServer(router, ctx)
@@ -265,14 +265,14 @@ test('SSE: initial data frame pushed immediately on connect', async (t) => {
   assert.equal(typeof initial.timestamp, 'number')
 })
 
-test('SSE push: main() fs.watch on .buju/batches/ → instant frame (curl-style smoke)', async (t) => {
+test('SSE push: main() fs.watch on .taskswarm/batches/ → instant frame (curl-style smoke)', async (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
-  mkdirSync(join(root, '.buju', 'batches'), { recursive: true })
+  mkdirSync(join(root, '.taskswarm', 'batches'), { recursive: true })
 
   // Spawn the real server (main()) — the 2s poll + fs.watch watcher only run
   // in main()'s lifecycle, mirroring the Step-4 curl smoke:
-  //   curl -N /api/stream  → initial frame; touch .buju/batches/x → new frame.
+  //   curl -N /api/stream  → initial frame; touch .taskswarm/batches/x → new frame.
   const repoRoot = fileURLToPath(new URL('..', import.meta.url))
   const serverPath = fileURLToPath(new URL('./server.mjs', import.meta.url))
   const child = spawn(
@@ -289,7 +289,7 @@ test('SSE push: main() fs.watch on .buju/batches/ → instant frame (curl-style 
       let out = ''
       child.stdout.on('data', (d) => {
         out += d.toString()
-        if (out.includes('Buju Dashboard → http://localhost:')) resolve(out)
+        if (out.includes('TaskSwarm Dashboard → http://localhost:')) resolve(out)
       })
       child.stderr.on('data', (d) => (out += d.toString()))
       child.on('exit', (code) => reject(new Error(`child exited early (code ${code}): ${out}`)))
@@ -332,7 +332,7 @@ test('SSE push: main() fs.watch on .buju/batches/ → instant frame (curl-style 
 test('main(): standalone launch (registerCore + WEB-004 registerExtra) + clean SIGTERM exit', async (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
-  mkdirSync(join(root, '.buju', 'batches'), { recursive: true })
+  mkdirSync(join(root, '.taskswarm', 'batches'), { recursive: true })
 
   const repoRoot = fileURLToPath(new URL('..', import.meta.url)) // worktree root
   const serverPath = fileURLToPath(new URL('./server.mjs', import.meta.url))
@@ -352,7 +352,7 @@ test('main(): standalone launch (registerCore + WEB-004 registerExtra) + clean S
       let out = ''
       child.stdout.on('data', (d) => {
         out += d.toString()
-        if (out.includes('Buju Dashboard → http://localhost:')) resolve(out)
+        if (out.includes('TaskSwarm Dashboard → http://localhost:')) resolve(out)
       })
       child.stderr.on('data', (d) => (out += d.toString()))
       child.on('exit', (code) => reject(new Error(`child exited early (code ${code}): ${out}`)))
@@ -360,7 +360,7 @@ test('main(): standalone launch (registerCore + WEB-004 registerExtra) + clean S
     8000,
     'server did not start',
   )
-  assert.match(output, /Buju Dashboard → http:\/\/localhost:\d+/)
+  assert.match(output, /TaskSwarm Dashboard → http:\/\/localhost:\d+/)
 
   const port = Number(output.match(/http:\/\/localhost:(\d+)/)[1])
   const health = await fetch(`http://127.0.0.1:${port}/api/health`)

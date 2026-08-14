@@ -18,7 +18,7 @@ import {
 } from '../lib/orchestrator/settings.js'
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'buju-i18n-'))
+  return mkdtempSync(join(tmpdir(), 'taskswarm-i18n-'))
 }
 
 test('cjkRatio / detectLocaleFromText', () => {

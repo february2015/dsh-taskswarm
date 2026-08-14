@@ -19,7 +19,7 @@
 ### Step 1: Create File
 **Status:** ⬜ Not Started
 
-- [ ] Create `parallel-buju-EXAMPLE-002.txt` with the line `EXAMPLE-002 parallel-ok`
+- [ ] Create `parallel-taskswarm-EXAMPLE-002.txt` with the line `EXAMPLE-002 parallel-ok`
 
 ---
 

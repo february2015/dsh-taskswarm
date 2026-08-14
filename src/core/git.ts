@@ -2,7 +2,7 @@
  * Git command runner.
  * Ported from TaskPlane `extensions/taskplane/git.ts`
  * (github.com/HenryLach/taskplane, MIT License).
- * @module buju/core/git
+ * @module taskswarm/core/git
  */
 import { execFileSync } from 'node:child_process'
 
@@ -58,14 +58,14 @@ export function gitRoot(cwd: string): string | null {
 
 /**
  * Ensure a git identity exists locally (commits fail without one).
- * Prefers existing config; falls back to a neutral "buju" identity.
+ * Prefers existing config; falls back to a neutral "taskswarm" identity.
  */
 export function ensureGitIdentity(cwd: string): GitResult {
   const name = runGit(['config', 'user.name'], cwd)
   const email = runGit(['config', 'user.email'], cwd)
   const needName = !name.ok || !name.stdout.trim()
   const needEmail = !email.ok || !email.stdout.trim()
-  if (needName) runGit(['config', 'user.name', 'buju'], cwd)
-  if (needEmail) runGit(['config', 'user.email', 'buju@localhost'], cwd)
-  return { ok: true, stdout: '', stderr: needName || needEmail ? 'set local buju identity' : '' }
+  if (needName) runGit(['config', 'user.name', 'tswarm'], cwd)
+  if (needEmail) runGit(['config', 'user.email', 'taskswarm@localhost'], cwd)
+  return { ok: true, stdout: '', stderr: needName || needEmail ? 'set local taskswarm identity' : '' }
 }

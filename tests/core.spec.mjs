@@ -9,7 +9,7 @@ import { scanTasks, buildWaves } from '../lib/core/discover.js'
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'buju-core-'))
+  return mkdtempSync(join(tmpdir(), 'taskswarm-core-'))
 }
 
 function writeTask(dir, id, name, deps, steps) {
@@ -53,27 +53,27 @@ test('naming sanitizes components', () => {
 
 test('parsePrompt extracts id, deps, steps, criteria', () => {
   const root = tmp()
-  const dir = join(root, 'BUJU-001-foo')
-  writeTask(dir, 'BUJU-001', 'Foo', ['A-001'], [
+  const dir = join(root, 'TASKSWARM-001-foo')
+  writeTask(dir, 'TASKSWARM-001', 'Foo', ['A-001'], [
     { title: 'Preflight', items: ['read prompt', 'read status'] },
     { title: 'Work', items: ['create file'] },
   ])
   const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
   assert.ok(task)
-  assert.equal(task.id, 'BUJU-001')
+  assert.equal(task.id, 'TASKSWARM-001')
   assert.equal(task.name, 'Foo')
   assert.deepEqual(task.deps, ['A-001'])
   assert.equal(task.steps.length, 2)
   assert.equal(task.steps[1].items[0].text, 'create file')
   assert.equal(task.steps[1].items[0].checked, false)
-  assert.ok(task.completionCriteria.includes('BUJU-001.txt exists'))
+  assert.ok(task.completionCriteria.includes('TASKSWARM-001.txt exists'))
   rmSync(root, { recursive: true, force: true })
 })
 
 test('advanceStep ticks checkboxes and markTaskDone sets status', () => {
   const root = tmp()
-  const dir = join(root, 'BUJU-002-bar')
-  writeTask(dir, 'BUJU-002', 'Bar', [], [
+  const dir = join(root, 'TASKSWARM-002-bar')
+  writeTask(dir, 'TASKSWARM-002', 'Bar', [], [
     { title: 'Preflight', items: ['a', 'b'] },
   ])
   const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')

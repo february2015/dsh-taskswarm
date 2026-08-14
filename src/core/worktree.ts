@@ -4,20 +4,20 @@
  * (github.com/HenryLach/taskplane, MIT License) — lean re-implementation.
  *
  * Model:
- *   - `buju/orch`  — dedicated integration branch (created once, never checked
+ *   - `taskswarm/orch`  — dedicated integration branch (created once, never checked
  *     out in the main working tree).
- *   - one lane worktree per task: `git worktree add -b buju/<taskId> <laneDir>`
+ *   - one lane worktree per task: `git worktree add -b taskswarm/<taskId> <laneDir>`
  *   - worker checkpoints: `git add -A && git commit -m "checkpoint: <msg>"`
- *   - merge-back: merge the lane branch into `buju/orch` inside the orch
+ *   - merge-back: merge the lane branch into `taskswarm/orch` inside the orch
  *     worktree, then remove the lane worktree and delete the lane branch.
- * @module buju/core/worktree
+ * @module taskswarm/core/worktree
  */
 import { existsSync, mkdirSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { runGit, ensureGitIdentity, type GitResult } from './git.ts'
 import { sanitizeNameComponent } from './naming.ts'
 
-export const ORCH_BRANCH = 'buju/orch'
+export const ORCH_BRANCH = 'taskswarm/orch'
 
 export interface WorktreePaths {
   stateRoot: string
@@ -54,7 +54,7 @@ export interface LaneWorktree {
 
 /** Create an isolated lane worktree for a task. */
 export function createLaneWorktree(repoRoot: string, paths: WorktreePaths, taskId: string): LaneWorktree | null {
-  const branch = `buju/${sanitizeNameComponent(taskId, 48)}`
+  const branch = `taskswarm/${sanitizeNameComponent(taskId, 48)}`
   const dir = join(paths.worktreesDir, sanitizeNameComponent(taskId, 48))
   // Leftovers from a killed process or an aborted batch must not block the
   // next batch: remove a stale worktree dir, and attach an existing branch

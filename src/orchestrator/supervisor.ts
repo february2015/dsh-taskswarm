@@ -9,8 +9,8 @@
  *
  * DSH adaptation: the operator's session agent IS the supervisor. The
  * orchestrator registers a supervisor persona section + two tools
- * (`buju_supervisor_status` diagnostic, `buju_supervisor_control` actions) on
- * the invoking session agent, and wakes it with a `[Buju supervisor]` event
+ * (`tswarm_supervisor_status` diagnostic, `tswarm_supervisor_control` actions) on
+ * the invoking session agent, and wakes it with a `[TaskSwarm supervisor]` event
  * report whenever the engine emits a decision-worthy lifecycle event. The
  * agent then inspects state (read/status tools), classifies its next action,
  * and either acts or asks the operator — per {@link requiresConfirmation}.
@@ -18,20 +18,19 @@
  * Ported verbatim: {@link requiresConfirmation}, {@link ACTION_CLASSIFICATION_EXAMPLES},
  * the supervisor prompt structure (Identity / Context / Capabilities /
  * Standing Orders / Classification / Autonomy). Rewritten for DSH: event
- * contract (engine onEvent), tools, `.buju` state paths.
+ * contract (engine onEvent), tools, `.taskswarm` state paths.
  *
  * Deferred from the full port (supervisor.ts ~4.7k lines): audit-trail JSONL,
  * branch-protection detection, CI/PR lifecycle, rich batch-summary markdown.
- * @module buju/orchestrator/supervisor
+ * @module taskswarm/orchestrator/supervisor
  */
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs'
-import { spawn, type ChildProcess } from 'node:child_process'
-import { fileURLToPath } from 'node:url'
-import type { BujuEvent, BujuEngine } from './engine.ts'
+import type { TaskSwarmEvent, TaskSwarmEngine } from './engine.ts'
+import type { DashboardManager } from './dashboard.ts'
 import { formatBatchStatus, type BatchState, type LaneState } from '../core/status.ts'
 import { formatWavePlan, scanTasks, buildWaves } from '../core/discover.ts'
 import type { TaskPacket } from '../core/task.ts'
@@ -70,7 +69,7 @@ export type SupervisorMode = 'off' | SupervisorAutonomyLevel
 export type RecoveryActionClassification = 'diagnostic' | 'tier0_known' | 'destructive'
 
 export interface SupervisorEngineRef {
-  engine: BujuEngine
+  engine: TaskSwarmEngine
   repoRoot: string
   tasksRoot: string
   stateRoot: string
@@ -97,26 +96,26 @@ export function requiresConfirmation(classification: RecoveryActionClassificatio
 /**
  * Example actions per classification, used by the system prompt to guide the
  * supervisor. Ported from TaskPlane `ACTION_CLASSIFICATION_EXAMPLES`
- * (supervisor.ts:127), paths/tools adapted to DSH/Buju.
+ * (supervisor.ts:127), paths/tools adapted to DSH/TaskSwarm.
  */
 export const ACTION_CLASSIFICATION_EXAMPLES: Readonly<Record<RecoveryActionClassification, readonly string[]>> = {
   diagnostic: [
-    'Reading .buju/batches/*.json, tasks/*/STATUS.md, lane logs',
+    'Reading .taskswarm/batches/*.json, tasks/*/STATUS.md, lane logs',
     'Running git status / git log / git diff / git worktree list',
     'Running test suites (npm test / node --test)',
-    'Inspecting lanes and worktrees (buju_supervisor_status)',
+    'Inspecting lanes and worktrees (tswarm_supervisor_status)',
     'Reading any file for diagnostics',
   ],
   tier0_known: [
     'Retrying a failed or timed-out merge',
-    'Resuming a paused batch (buju_supervisor_control resume)',
-    'Pausing after the current wave (buju_supervisor_control pause)',
+    'Resuming a paused batch (tswarm_supervisor_control resume)',
+    'Pausing after the current wave (tswarm_supervisor_control pause)',
     'Clearing a git lock file (.git/index.lock)',
     'Cleaning up stale worktrees before a retry',
   ],
   destructive: [
-    'Aborting the batch (buju_supervisor_control abort)',
-    'Merging buju/orch into the working branch (buju_supervisor_control integrate)',
+    'Aborting the batch (tswarm_supervisor_control abort)',
+    'Merging taskswarm/orch into the working branch (tswarm_supervisor_control integrate)',
     'Running git reset / git checkout -B / git branch -D',
     'Removing worktrees (git worktree remove)',
     'Modifying STATUS.md / .DONE / batch-state files',
@@ -170,13 +169,13 @@ export function buildSupervisorSystemPrompt(
   const ctx = [
     `- **Batch:** ${context.batchId ?? '—'} | **Phase:** ${context.phase ?? 'idle'}`,
     context.progress ? `- **Progress:** ${context.progress}` : '',
-    `- **State root:** ${context.stateRoot ?? '.buju/'}`,
+    `- **State root:** ${context.stateRoot ?? '.taskswarm/'}`,
   ].filter(Boolean).join('\n')
   if (locale === 'en') {
-    return `# Buju Supervisor
+    return `# TaskSwarm Supervisor
 
-You are the batch supervisor, sharing this session with the operator (activated after /buju starts a batch). On a [Buju supervisor] event:
-1. Verify state with buju_supervisor_status;
+You are the batch supervisor, sharing this session with the operator (activated after /tswarm starts a batch). On a [TaskSwarm supervisor] event:
+1. Verify state with tswarm_supervisor_status;
 2. Classify actions: diagnostic (read-only checks, always allowed) / tier0_known (resume, pause, clearing locks, known recoveries) / destructive (abort, integrate, state changes);
 3. Act per autonomy: ${autonomyRule(autonomy, 'en')}
 4. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
@@ -186,10 +185,10 @@ ${ctx}
 
 Normal user conversation is unaffected.`
   }
-  return `# Buju Supervisor
+  return `# TaskSwarm Supervisor
 
-你是 batch supervisor，与 operator 共享此会话（/buju 启动批次后激活）。收到 [Buju supervisor] 事件后：
-1. 用 buju_supervisor_status 查证状态；
+你是 batch supervisor，与 operator 共享此会话（/tswarm 启动批次后激活）。收到 [TaskSwarm supervisor] 事件后：
+1. 用 tswarm_supervisor_status 查证状态；
 2. 分类动作：diagnostic（只读查证，永远可做）/ tier0_known（resume、pause、清锁等已知恢复）/ destructive（abort、integrate、改状态）；
 3. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
 4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
@@ -201,12 +200,12 @@ ${ctx}
 }
 
 /** Events that wake the supervisor agent. `lane-done` stays informational. */
-export function shouldWake(event: BujuEvent): boolean {
+export function shouldWake(event: TaskSwarmEvent): boolean {
   return event.type !== 'lane-done'
 }
 
 /** One-line event headline, shown first in the wake message. 双语。 */
-export function eventHeadline(event: BujuEvent, locale: Locale): string {
+export function eventHeadline(event: TaskSwarmEvent, locale: Locale): string {
   const m = messages(locale)
   switch (event.type) {
     case 'batch-started':
@@ -222,12 +221,12 @@ export function eventHeadline(event: BujuEvent, locale: Locale): string {
     case 'batch-aborted':
       return m.batchAborted(event.batchId)
     default:
-      return `[Buju supervisor] ${String(event.type)}`
+      return `[TaskSwarm supervisor] ${String(event.type)}`
   }
 }
 
 /** Wake message handed to the session agent（指引已由系统提示承载；状态用精简渲染+ETA）。 */
-export function supervisorEventReport(event: BujuEvent, state: BatchState | null, locale: Locale): string {
+export function supervisorEventReport(event: TaskSwarmEvent, state: BatchState | null, locale: Locale): string {
   const m = messages(locale)
   return [
     eventHeadline(event, locale),
@@ -324,6 +323,8 @@ export function registerSupervisor(
   getRef: () => SupervisorEngineRef | { error: string } | undefined,
   autonomy: SupervisorAutonomyLevel,
   periodic?: PeriodicControl,
+  /** 共享 dashboard 管理器（与 /tswarm 命令同源）；缺省时 dashboard 工具不可用。 */
+  dashboards?: DashboardManager,
 ): void {
   // ── supervisor 提示词段：可热替换（dispose 旧段后按当前语言重注册）──
   let systemPromptService: { section?(opts: { name: string; order: number; text: string }): (() => void) | undefined } | undefined
@@ -337,7 +338,7 @@ export function registerSupervisor(
     try {
       disposePrompt?.()
       disposePrompt = systemPromptService?.section?.({
-        name: 'buju:supervisor',
+        name: 'taskswarm:supervisor',
         order: 90,
         text: buildSupervisorSystemPrompt(autonomy, {}, promptLocale),
       }) ?? undefined
@@ -357,14 +358,14 @@ export function registerSupervisor(
     }
   }
   const refOf = (): SupervisorEngineRef | { error: string } | undefined => getRef()
-  const uninitialized = { ok: false, text: 'Buju 引擎未初始化（先运行 /orch）' } as const
+  const uninitialized = { ok: false, text: 'TaskSwarm 引擎未初始化（先运行 /orch）' } as const
   // 注册该工具的会话 agent：作为 batch owner，让事件只回发到本会话（避免跨会话串消息）。
   const toolOwner = (agentCtx as unknown as { agent?: unknown }).agent
   const toolSessionId = (agentCtx as unknown as { agent?: { session?: { id?: string } } }).agent?.session?.id
 
   register(defineTool({
-    name: 'buju_supervisor_status',
-    description: 'Buju supervisor：查看当前 batch / lane 状态（.buju 状态 + buju/orch 分支）。诊断类动作，无需确认。',
+    name: 'tswarm_supervisor_status',
+    description: 'TaskSwarm supervisor：查看当前 batch / lane 状态（.taskswarm 状态 + taskswarm/orch 分支）。诊断类动作，无需确认。',
     parameters: {},
     output: {
       schema: {
@@ -381,13 +382,13 @@ export function registerSupervisor(
       const ref = refOf()
       if (!ref || 'error' in ref) return uninitialized
       const state = ref.engine.status()
-      return { ok: true, text: state ? formatBatchStatus(state) : 'No Buju batch yet.' }
+      return { ok: true, text: state ? formatBatchStatus(state) : 'No TaskSwarm batch yet.' }
     },
   }))
 
   register(defineTool({
-    name: 'buju_supervisor_control',
-    description: 'Buju supervisor 控制。动作分类：status=diagnostic；resume/pause=tier0_known；integrate/abort=destructive（按自主度可能需先征求 operator 确认）。',
+    name: 'tswarm_supervisor_control',
+    description: 'TaskSwarm supervisor 控制。动作分类：status=diagnostic；resume/pause=tier0_known；integrate/abort=destructive（按自主度可能需先征求 operator 确认）。',
     parameters: {
       action: {
         type: 'string',
@@ -416,7 +417,7 @@ export function registerSupervisor(
       switch (action) {
         case 'status': {
           const s = engine.status()
-          return { ok: true, text: s ? formatBatchStatus(s) : 'No Buju batch yet.' }
+          return { ok: true, text: s ? formatBatchStatus(s) : 'No TaskSwarm batch yet.' }
         }
         case 'plan': {
           const scope = (args.scope as string | undefined)?.trim() || 'all'
@@ -436,7 +437,13 @@ export function registerSupervisor(
           const scope = (args.scope as string | undefined)?.trim() || 'all'
           try {
             const handle = engine.run(scope, toolOwner)
-            return { ok: true, text: `Batch ${handle.batchId} started (scope: ${scope})。` }
+            let text = `Batch ${handle.batchId} started (scope: ${scope})。`
+            // 波次执行即自动拉起 dashboard 并把链接打印出来（正常跑着就想看状态）。
+            if (dashboards) {
+              const d = await dashboards.ensure(ref.repoRoot)
+              text += d.ok ? `\n📊 Dashboard: ${d.url}` : `\n⚠️ Dashboard 启动失败：${d.text}`
+            }
+            return { ok: true, text }
           } catch (e) {
             return { ok: false, text: e instanceof Error ? e.message : String(e) }
           }
@@ -473,10 +480,10 @@ export function registerSupervisor(
     },
   }))
 
-  // ── buju_supervisor_locale：文字切换 supervisor 语言（写入 .buju/config.json）──
+  // ── tswarm_supervisor_locale：文字切换 supervisor 语言（写入 .taskswarm/config.json）──
   register(defineTool({
-    name: 'buju_supervisor_locale',
-    description: 'Buju supervisor 语言：查询/切换 supervisor 通知与提示词语言（zh-CN / en / auto 按会话自动检测）。operator 说"用英文汇报"/"用中文"等时调用；设置写入 .buju/config.json 持久化。',
+    name: 'tswarm_supervisor_locale',
+    description: 'TaskSwarm supervisor 语言：查询/切换 supervisor 通知与提示词语言（zh-CN / en / auto 按会话自动检测）。operator 说"用英文汇报"/"用中文"等时调用；设置写入 .taskswarm/config.json 持久化。',
     parameters: {
       locale: {
         type: 'string',
@@ -519,8 +526,8 @@ export function registerSupervisor(
 
   if (periodic) {
     register(defineTool({
-      name: 'buju_supervisor_report_interval',
-      description: 'Buju supervisor 定时汇报：设置每隔 N 分钟汇报一次批次进度（minutes=0 关闭）。operator 要求"每隔 X 分钟汇报一次"时调用；不传参数则查询当前设置。设置写入 .buju/config.json 持久化。',
+      name: 'tswarm_supervisor_report_interval',
+      description: 'TaskSwarm supervisor 定时汇报：设置每隔 N 分钟汇报一次批次进度（minutes=0 关闭）。operator 要求"每隔 X 分钟汇报一次"时调用；不传参数则查询当前设置。设置写入 .taskswarm/config.json 持久化。',
       parameters: {
         minutes: { type: 'integer', description: '汇报间隔（分钟）。0 = 关闭定时汇报；不传 = 查询当前设置。' },
       },
@@ -551,12 +558,10 @@ export function registerSupervisor(
     }))
   }
 
-  // ── buju_dashboard：文字指令启动 Web Dashboard（自动探测空闲端口）──
-  const dashboards = new Map<string, { proc: ChildProcess; url: string }>()
-  const dashboardServerPath = fileURLToPath(new URL('../../dashboard/server.mjs', import.meta.url))
+  // ── tswarm_dashboard：文字指令启动 Web Dashboard（自动探测空闲端口；与 /tswarm 命令共享进程注册表）──
   register(defineTool({
-    name: 'buju_dashboard',
-    description: 'Buju Web Dashboard 管理：start（为当前仓库启动本地 dashboard server，自动探测空闲端口）/ status / stop。',
+    name: 'tswarm_dashboard',
+    description: 'TaskSwarm Web Dashboard 管理：start（为当前仓库启动本地 dashboard server，自动探测空闲端口）/ status / stop。',
     parameters: {
       action: {
         type: 'string',
@@ -579,56 +584,21 @@ export function registerSupervisor(
     async execute(args) {
       const ref = refOf()
       if (!ref || 'error' in ref) return uninitialized
+      if (!dashboards) return { ok: false, text: 'dashboard 管理器未初始化。' }
       const repoRoot = ref.repoRoot
       const action = args.action as string
       if (action === 'status') {
-        const d = dashboards.get(repoRoot)
-        return { ok: true, text: d ? `Dashboard 运行中：${d.url}` : 'Dashboard 未启动（用 start 启动）。' }
+        const s = dashboards.status(repoRoot)
+        return { ok: true, text: s.running ? `Dashboard 运行中：${s.url}` : 'Dashboard 未启动（用 start 启动）。' }
       }
       if (action === 'stop') {
-        const d = dashboards.get(repoRoot)
-        if (!d) return { ok: true, text: 'Dashboard 未启动。' }
-        try {
-          d.proc.kill()
-        } catch {
-          // already dead
-        }
-        dashboards.delete(repoRoot)
-        return { ok: true, text: `已停止 ${d.url}` }
+        return { ok: true, text: dashboards.stop(repoRoot).text }
       }
       // start
-      const existing = dashboards.get(repoRoot)
-      if (existing) return { ok: true, text: `Dashboard 已在运行：${existing.url}` }
-      if (!existsSync(dashboardServerPath)) {
-        return { ok: false, text: `未找到 ${dashboardServerPath}——dashboard server 产物（WEB-003）尚未并入工作分支，先完成 integrate。` }
-      }
-      const proc = spawn(process.execPath, [dashboardServerPath, '--root', repoRoot, '--no-open'], {
-        stdio: ['ignore', 'pipe', 'pipe'],
-      })
-      const url = await new Promise<string>((resolve, reject) => {
-        const timer = setTimeout(() => {
-          try {
-            proc.kill()
-          } catch {
-            // ignore
-          }
-          reject(new Error('dashboard 启动超时（15s 内未输出 URL）'))
-        }, 15_000)
-        const onData = (buf: Buffer): void => {
-          const m = buf.toString().match(/http:\/\/localhost:\d+/)
-          if (m) {
-            clearTimeout(timer)
-            resolve(m[0])
-          }
-        }
-        proc.stdout?.on('data', onData)
-        proc.on('exit', (code) => {
-          clearTimeout(timer)
-          reject(new Error(`dashboard 进程退出（code ${String(code)}）`))
-        })
-      })
-      dashboards.set(repoRoot, { proc, url })
-      return { ok: true, text: `Dashboard 已启动：${url}（浏览器打开即可；stop 可停止）` }
+      const r = await dashboards.ensure(repoRoot)
+      return r.ok
+        ? { ok: true, text: `Dashboard 已启动：${r.url}（浏览器打开即可；stop 可停止）` }
+        : { ok: false, text: `Dashboard 启动失败：${r.text}` }
     },
   }))
 }
@@ -638,8 +608,12 @@ export interface PeriodicSupervisionOptions {
   checkIntervalMs?: number
   /** 距上次 lane 状态变化超过该时长仍无动静 → 唤醒一次"疑似卡住"提醒（默认 4 分钟）。 */
   stalledThresholdMs?: number
-  /** 初始定时汇报间隔（分钟），来自 .buju/config.json 的持久化设置（默认 0 = 关）。 */
+  /** 初始定时汇报间隔（分钟），来自 .taskswarm/config.json 的持久化设置（默认 0 = 关）。 */
   initialReportIntervalMinutes?: number
+  /** 波次执行期间自动维持 dashboard：返回当前是否已在运行（只读，零成本）。 */
+  dashboardStatus?: () => { running: boolean; url?: string }
+  /** 波次执行期间 dashboard 未运行时拉起（幂等：已运行则直接返回链接）。 */
+  ensureDashboard?: () => Promise<{ ok: boolean; url?: string; text?: string }>
 }
 
 export interface PeriodicControl {
@@ -668,7 +642,7 @@ export interface PeriodicControl {
 /**
  * 最近一次 worker 会话日志活动（毫秒时间戳）。把 lane worktree 绝对路径换算成
  * DSH 会话存储目录名（`/` → `-`，前后加 `--`，如
- * `--Users-robin-myProject-dsh-buju-.buju-worktrees-web-003--`），取其中
+ * `--Users-robin-myProject-taskswarm-.taskswarm-worktrees-web-003--`），取其中
  * 会话子目录（前缀 `session-`）里 `session.jsonl(.zstd)` 的最新 mtime。找不到返回 0。
  */
 export function latestSessionActivity(worktree: string): number {
@@ -708,6 +682,8 @@ export function startPeriodicSupervision(
 ): PeriodicControl {
   const checkIntervalMs = options.checkIntervalMs ?? 60_000
   const stalledThresholdMs = options.stalledThresholdMs ?? 240_000
+  const ensureDashboard = options.ensureDashboard
+  const dashboardStatus = options.dashboardStatus
   // 定时汇报默认关闭；可用 settings 里的 reportIntervalMinutes 初始化为持久值
   const initialMinutes = options.initialReportIntervalMinutes ?? 0
   let reportIntervalMs = Math.round(initialMinutes * 60_000)
@@ -715,6 +691,8 @@ export function startPeriodicSupervision(
   let lastChangeAt = 0
   let lastReportAt = initialMinutes > 0 ? Date.now() : 0
   let stalledWarned = false
+  /** 本批次是否已通知过 dashboard 链接（自动拉起成功时只通知一次）。 */
+  let dashboardNotifiedBatch: string | null = null
 
   /** 当前 locale（引擎 ref 上的可变状态；工具切换后即时生效）。 */
   const refLocale = (): Locale => {
@@ -734,6 +712,7 @@ export function startPeriodicSupervision(
       lastChangeAt = 0
       lastReportAt = 0
       stalledWarned = false
+      dashboardNotifiedBatch = null
       return
     }
     const now = Date.now()
@@ -757,6 +736,23 @@ export function startPeriodicSupervision(
       } else if (anyFound) {
         // 会话仍活跃：worker 在干活，重置无变化计时，避免每轮重复评估。
         lastChangeAt = now
+      }
+    }
+    // 波次执行期间自动维持 dashboard：未运行则拉起，成功拉起后通知一次链接
+    // （覆盖引擎重启续跑、进程意外退出等"开始时未打印链接"的路径）。
+    if (ensureDashboard) {
+      const ds = dashboardStatus ? dashboardStatus() : { running: true }
+      if (!ds.running) {
+        void ensureDashboard()
+          .then((r) => {
+            if (r.ok && dashboardNotifiedBatch !== state.id) {
+              dashboardNotifiedBatch = state.id
+              wake(`${m.dashboardUrl(r.url ?? '')}`)
+            }
+          })
+          .catch(() => {
+            // 拉起失败：下轮检查静默重试，不打扰用户
+          })
       }
     }
     // 定时汇报（默认关闭；operator 要求后按间隔唤醒）

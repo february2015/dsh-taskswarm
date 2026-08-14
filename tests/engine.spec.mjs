@@ -3,7 +3,7 @@ import assert from 'node:assert/strict'
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
-import { BujuEngine } from '../lib/orchestrator/engine.js'
+import { TaskSwarmEngine } from '../lib/orchestrator/engine.js'
 import { runGit } from '../lib/core/git.js'
 import { checkpointCommit, worktreePaths, listLaneWorktrees } from '../lib/core/worktree.js'
 import { markTaskDone, parseStatusFile } from '../lib/core/task.js'
@@ -72,7 +72,7 @@ class FakeWorkerHost {
 }
 
 async function makeRepo() {
-  const root = mkdtempSync(join(tmpdir(), 'buju-engine-'))
+  const root = mkdtempSync(join(tmpdir(), 'taskswarm-engine-'))
   runGit(['init', '-q'], root)
   runGit(['config', 'user.email', 'test@example.com'], root)
   runGit(['config', 'user.name', 'test'], root)
@@ -88,10 +88,10 @@ test('engine runs 2 independent tasks in parallel then a dependent task', async 
   writeTask(join(tasksRoot, 'A-001-alpha'), 'A-001', 'Alpha', [])
   writeTask(join(tasksRoot, 'B-002-beta'), 'B-002', 'Beta', [])
   writeTask(join(tasksRoot, 'C-003-gamma'), 'C-003', 'Gamma', ['A-001'])
-  const stateRoot = join(repo, '.buju')
+  const stateRoot = join(repo, '.taskswarm')
 
   const host = new FakeWorkerHost()
-  const engine = new BujuEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
 
   // Plan: A+B in wave 1, C in wave 2.
   const plan = engine.plan('all')
@@ -147,7 +147,7 @@ test('engine plan reports unresolved dependency references', async () => {
   const repo = await makeRepo()
   const tasksRoot = join(repo, 'tasks')
   writeTask(join(tasksRoot, 'X-001-ok'), 'X-001', 'Ok', ['MISSING-999'])
-  const engine = new BujuEngine({ repoRoot: repo, tasksRoot, stateRoot: join(repo, '.buju'), host: new FakeWorkerHost() })
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot: join(repo, '.taskswarm'), host: new FakeWorkerHost() })
   const plan = engine.plan('all')
   assert.equal(plan.count, 1)
   assert.deepEqual(plan.waves.unresolvedDeps.get('X-001'), ['MISSING-999'])

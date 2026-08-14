@@ -1,12 +1,12 @@
 /**
  * Demo runner — boots inside a real `dsh --profile` composition and runs a
- * full Buju batch against a scratch git repo with a non-LLM lane host,
+ * full TaskSwarm batch against a scratch git repo with a non-LLM lane host,
  * printing the batch status. Purpose: verify the plugin mounts and the engine
  * runs end-to-end inside a genuine DSH process (no GUI, no LLM needed).
  *
- * Sandbox profile: bundles [dsh-base, dsh-buju], patch inserts
- * `- id: buju-demo-runner, name: 'dsh-buju/demo'`.
- * @module buju/demo
+ * Sandbox profile: bundles [dsh-base, dsh-taskswarm], patch inserts
+ * `- id: taskswarm-demo-runner, name: 'dsh-taskswarm/demo'`.
+ * @module taskswarm/demo
  */
 import { mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'node:fs'
 import { join } from 'node:path'
@@ -14,14 +14,14 @@ import { randomUUID } from 'node:crypto'
 import { tmpdir } from 'node:os'
 import type { Context } from '@deepseek-ai/cordis'
 import { SessionId } from '@deepseek-ai/dsh-session'
-import { BujuEngine } from './orchestrator/engine.ts'
+import { TaskSwarmEngine } from './orchestrator/engine.ts'
 import { runGit } from './core/git.ts'
 import { checkpointCommit } from './core/worktree.ts'
 import { markTaskDone } from './core/task.ts'
 import { formatBatchStatus, type BatchState } from './core/status.ts'
 import type { LaneSpec, WorkerHost, WorkerResult } from './orchestrator/worker-host.ts'
 
-export const name = 'buju-demo-runner'
+export const name = 'taskswarm-demo-runner'
 export const inject: string[] = []
 
 const sleep = (ms: number): Promise<void> => new Promise((resolve) => setTimeout(resolve, ms))
@@ -77,12 +77,12 @@ function writeTask(tasksRoot: string, id: string, name: string, deps: string[]):
 
 async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void> {
   await ctx.get('loader')?.await()
-  const root = mkdtempSync(join(tmpdir(), 'buju-demo-'))
+  const root = mkdtempSync(join(tmpdir(), 'taskswarm-demo-'))
   try {
     runGit(['init', '-q'], root)
-    runGit(['config', 'user.email', 'demo@buju.local'], root)
+    runGit(['config', 'user.email', 'demo@taskswarm.local'], root)
     runGit(['config', 'user.name', 'demo'], root)
-    writeFileSync(join(root, 'README.md'), '# buju demo\n', 'utf-8')
+    writeFileSync(join(root, 'README.md'), '# taskswarm demo\n', 'utf-8')
     runGit(['add', '-A'], root)
     runGit(['commit', '-m', 'init'], root)
 
@@ -91,14 +91,14 @@ async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void
     writeTask(tasksRoot, 'B-002', 'Beta', [])
     writeTask(tasksRoot, 'C-003', 'Gamma', ['A-001'])
 
-    const engine = new BujuEngine({
+    const engine = new TaskSwarmEngine({
       repoRoot: root,
       tasksRoot,
-      stateRoot: join(root, '.buju'),
+      stateRoot: join(root, '.taskswarm'),
       host: new DemoWorkerHost(),
     })
     const plan = engine.plan('all')
-    console.log(`Buju demo: ${plan.count} tasks in ${plan.waves.waves.length} waves`)
+    console.log(`TaskSwarm demo: ${plan.count} tasks in ${plan.waves.waves.length} waves`)
     engine.run('all')
 
     const deadline = Date.now() + 30_000
@@ -108,7 +108,7 @@ async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void
       await sleep(200)
       state = engine.status()
     }
-    console.log('=== Buju batch status ===')
+    console.log('=== TaskSwarm batch status ===')
     console.log(state ? formatBatchStatus(state) : '(no batch state)')
 
     // Command plane: execute the /orch-family commands through the real
@@ -130,7 +130,7 @@ async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void
         })
         console.log(`(agent session meta: ${JSON.stringify((agent as unknown as { session: { meta?: unknown } }).session.meta)})`)
         console.log('=== Command plane (real ctx.commands) ===')
-        for (const line of ['/buju-init', '/orch-plan', '/orch-status']) {
+        for (const line of ['/tswarm-init', '/orch-plan', '/orch-status']) {
           const execution = await commands.execute(agent, line, new AbortController().signal) as
             | { result?: { kind: string; text: string } } | undefined
           const result = execution?.result
@@ -168,7 +168,7 @@ async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void
 
     exit(state?.phase === 'complete' ? 0 : 1)
   } catch (err) {
-    console.error(`buju-demo failed: ${err instanceof Error ? err.message : String(err)}`)
+    console.error(`taskswarm-demo failed: ${err instanceof Error ? err.message : String(err)}`)
     rmSync(root, { recursive: true, force: true })
     exit(1)
   }
@@ -177,7 +177,7 @@ async function runDemo(ctx: Context, exit: (code: number) => void): Promise<void
 export function apply(ctx: Context): void {
   const exit = ctx.get('appExit') as ((code: number) => void) | undefined
   if (exit === undefined) {
-    console.error('buju-demo-runner: launcher must provide ctx.appExit')
+    console.error('taskswarm-demo-runner: launcher must provide ctx.appExit')
     process.exit(1)
     return
   }

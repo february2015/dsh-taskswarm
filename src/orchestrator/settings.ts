@@ -17,7 +17,7 @@
  *   - supervisorMode: 'off' | 'interactive' | 'supervised' | 'autonomous'
  *   - workerModel / reviewerModel: model overrides
  *   - includeDoneTasks: boolean
- * @module buju/orchestrator/settings
+ * @module taskswarm/orchestrator/settings
  */
 import { existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'

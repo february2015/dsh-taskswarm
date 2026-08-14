@@ -1,6 +1,6 @@
-# Buju Runbook (Ops)
+# TaskSwarm Runbook (Ops)
 
-> This manual is the standard operating procedure (SOP) for **supervisors / AI agents / human operators** operating Buju batches.
+> This manual is the standard operating procedure (SOP) for **supervisors / AI agents / human operators** operating TaskSwarm batches.
 > Goal: anyone (or any AI) who installs this tool can, when encountering the scenarios below, diagnose, handle, and recover step by step without losing work.
 >
 > It covers three major categories:
@@ -9,7 +9,7 @@
 > - **Exception handling** (Part B): leftover cleanup, error recovery, work salvage
 > - **Reference** (Part C): action classification, wave dependency semantics, known-issues links
 >
-> All commands use the repo root as cwd (e.g. `~/myProject/dsh-buju`). Action classification (diagnostic /
+> All commands use the repo root as cwd (e.g. `~/myProject/taskswarm`). Action classification (diagnostic /
 > tier0_known / destructive) matches the supervisor autonomy rules, see §9.
 
 ---
@@ -18,16 +18,16 @@
 
 ## 1. State Model Overview (Understand the State First, Then Act)
 
-Buju's **single authoritative state** is the on-disk `.buju/`, not memory. After a process restart, the
-engine's in-memory state is cleared, leaving only the disk state — so all recovery starts by reading `.buju/`.
+TaskSwarm's **single authoritative state** is the on-disk `.taskswarm/`, not memory. After a process restart, the
+engine's in-memory state is cleared, leaving only the disk state — so all recovery starts by reading `.taskswarm/`.
 
 ```
 <repo>/
-├── .buju/
+├── .taskswarm/
 │   ├── batches/<batchId>.json   # batch's single authoritative state (phase + lanes[])
 │   ├── mailbox/<batchId>/       # async messages between agents (supervisor/inbox, <lane>/outbox, broadcast)
 │   └── worktrees/
-│       ├── _orch/               # resident worktree of the buju/orch integration branch (engine infrastructure, do not delete)
+│       ├── _orch/               # resident worktree of the taskswarm/orch integration branch (engine infrastructure, do not delete)
 │       └── <taskId>/            # isolated worktree for each lane
 ├── tasks/<ID>-<slug>/
 │   ├── PROMPT.md                # task mission/steps (above the separator line is immutable)
@@ -44,18 +44,18 @@ engine's in-memory state is cleared, leaving only the disk state — so all reco
 
 | Branch              | Role                                               | Lifecycle                                    |
 | --------------- | ------------------------------------------------ | ------------------------------------------ |
-| `buju/orch`     | Integration branch; all lane outputs are aggregated here | Resident, auto-created by the engine, **do not delete** |
-| `buju/<taskId>` | Working branch of a single lane (checkpoint commits live here) | Deleted after a successful merge; **leftover** after failure/abort/crash |
+| `taskswarm/orch`     | Integration branch; all lane outputs are aggregated here | Resident, auto-created by the engine, **do not delete** |
+| `taskswarm/<taskId>` | Working branch of a single lane (checkpoint commits live here) | Deleted after a successful merge; **leftover** after failure/abort/crash |
 
 **Key mechanisms** (code basis `src/core/worktree.ts`, `src/orchestrator/engine.ts`):
 
-- **Checkpoint discipline**: the worker performs checkpoint commits to `buju/<taskId>` at step boundaries
+- **Checkpoint discipline**: the worker performs checkpoint commits to `taskswarm/<taskId>` at step boundaries
   and on exit. A process crash does not lose already-committed outputs — this is the foundation of salvage.
-- **Automatic resumption on rerun**: if `createLaneWorktree` finds that the `buju/<taskId>` branch already
+- **Automatic resumption on rerun**: if `createLaneWorktree` finds that the `taskswarm/<taskId>` branch already
   exists, it runs `git worktree add <branch> <dir>` to **attach the existing branch** instead of creating
   a new one (KI-004 fix). So rerunning a failed task = continuing from old checkpoints, not from scratch.
 - **abort semantics**: cooperative, takes effect at wave boundaries; kills running lanes and `worktree remove`s
-  all lane worktrees, but **`buju/<taskId>` branches are kept** (for troubleshooting/salvage).
+  all lane worktrees, but **`taskswarm/<taskId>` branches are kept** (for troubleshooting/salvage).
 - **Process crash/restart**: the engine's `active` in-memory table is cleared → `pause / resume / abort` all
   become no-ops ("No running batch"); the disk state stays as it was right before the crash (possibly
   phase=running but no engine running).
@@ -66,22 +66,22 @@ engine's in-memory state is cleared, leaving only the disk state — so all reco
 
 | Scenario                      | How to determine                             | Classification | Standard action                              |
 | ----------------------- | ---------------------------------------- | ----------- | ------------------------------------------ |
-| Check batch status            | `/buju-status` or read `.buju/batches/*.json` | diagnostic  | Verify directly, no confirmation needed      |
-| View wave plan / dependency graph | `/buju-plan [scope]`, `/buju-deps`        | diagnostic  | Read-only, just do it                       |
-| List active lanes and worktrees | `/buju-sessions`                         | diagnostic  | Read-only, just do it                       |
-| View worker session logs / mailbox | `~/.dsh/sessions/…`, `.buju/mailbox/…`    | diagnostic  | §5.3 / §5.4                                |
-| Enable/disable periodic reports | "Report every X minutes"                    | tier0_known | `buju_supervisor_report_interval <N>` (0=off) |
-| pause / resume               | phase=paused or running                     | tier0_known | `buju_supervisor_control pause/resume`     |
+| Check batch status            | `/tswarm-status` or read `.taskswarm/batches/*.json` | diagnostic  | Verify directly, no confirmation needed      |
+| View wave plan / dependency graph | `/tswarm-plan [scope]`, `/tswarm-deps`        | diagnostic  | Read-only, just do it                       |
+| List active lanes and worktrees | `/tswarm-sessions`                         | diagnostic  | Read-only, just do it                       |
+| View worker session logs / mailbox | `~/.dsh/sessions/…`, `.taskswarm/mailbox/…`    | diagnostic  | §5.3 / §5.4                                |
+| Enable/disable periodic reports | "Report every X minutes"                    | tier0_known | `tswarm_supervisor_report_interval <N>` (0=off) |
+| pause / resume               | phase=paused or running                     | tier0_known | `tswarm_supervisor_control pause/resume`     |
 | Clear `.git/index.lock`     | `ls .git/index.lock` (confirm no git process) | tier0_known | `rm .git/index.lock`                       |
 | Retry a failed merge         | lane error="merge failed: ..."              | tier0_known | Resolve conflicts, then retry               |
 | GUI not effective after src changes | behavior is still the old one               | —           | `npm run build` + restart dsh web (§3.2)    |
-| Create a new task package    | task missing under tasks/                   | —           | `/buju-init` or hand-write per §4.1         |
+| Create a new task package    | task missing under tasks/                   | —           | `/tswarm-init` or hand-write per §4.1         |
 | Manually change task status / delete .DONE | status doesn't match reality               | destructive | Confirm, then per §4.4                      |
-| Delete leftover lane branches | `git branch` shows `buju/<id>`              | destructive | Verify merged into orch first, then `git branch -D` (§6.2) |
+| Delete leftover lane branches | `git branch` shows `taskswarm/<id>`              | destructive | Verify merged into orch first, then `git branch -D` (§6.2) |
 | Delete leftover worktree     | `git worktree list`                         | destructive | Salvage uncommitted content first, then `worktree remove --force` (§6.3) |
-| Delete mailbox / batch records | `ls .buju/mailbox`, `.buju/batches`       | destructive | `rm -rf` (tradeoffs in §6.4/§6.5)           |
-| abort batch                  | phase=running                               | destructive | `buju_supervisor_control abort`             |
-| integrate to working branch  | after the batch completes                   | destructive | `buju_supervisor_control integrate`         |
+| Delete mailbox / batch records | `ls .taskswarm/mailbox`, `.taskswarm/batches`       | destructive | `rm -rf` (tradeoffs in §6.4/§6.5)           |
+| abort batch                  | phase=running                               | destructive | `tswarm_supervisor_control abort`             |
+| integrate to working branch  | after the batch completes                   | destructive | `tswarm_supervisor_control integrate`         |
 | Modify STATUS/.DONE/batch state | —                                        | destructive | Ask the operator to confirm first           |
 | Recovery after process crash/restart | phase stuck at running, abort reports no-op | destructive | Follow the six steps in §7.4                |
 
@@ -96,12 +96,12 @@ engine's in-memory state is cleared, leaving only the disk state — so all reco
 ### 3.1 Installing into DSH
 
 ```bash
-cd ~/myProject/dsh-buju && npm run build
-dsh plugin --profile web add ~/myProject/dsh-buju   # append the dsh-buju bundle to the web profile
-# after restarting dsh web, in-session: /buju-init → /buju all → /buju-status
+cd ~/myProject/taskswarm && npm run build
+dsh plugin --profile web add ~/myProject/taskswarm   # append the taskswarm bundle to the web profile
+# after restarting dsh web, in-session: /tswarm-init → /tswarm all → /tswarm-status
 ```
 
-Uninstall: `dsh plugin --profile web remove dsh-buju` (a restart is also required for it to take effect).
+Uninstall: `dsh plugin --profile web remove taskswarm` (a restart is also required for it to take effect).
 
 > Publishing to npm / version management (maintainers): see `docs/release.md`.
 
@@ -116,24 +116,24 @@ Uninstall: `dsh plugin --profile web remove dsh-buju` (a restart is also require
 
 | Config                                   | Default                                     | Description                                             |
 | -------------------------------------- | ---------------------------------------- | ------------------------------------------------------ |
-| `repoRoot` / `tasksRoot` / `stateRoot` | session cwd / `<repo>/tasks` / `<repo>/.buju` | the three root paths for repo, task packages, and state |
-| `host`                                 | `in-process`                             | `headless` runs via the `dsh --profile buju-worker` subprocess |
+| `repoRoot` / `tasksRoot` / `stateRoot` | session cwd / `<repo>/tasks` / `<repo>/.taskswarm` | the three root paths for repo, task packages, and state |
+| `host`                                 | `in-process`                             | `headless` runs via the `dsh --profile taskswarm-worker` subprocess |
 | `workerModel` / `reviewerModel`        | session default                          | worker / reviewer model overrides                      |
 | `includeDoneTasks`                     | false                                     | when true, tasks with `.DONE` are also scanned (rerun completed tasks) |
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous` (autonomy level) |
 | `supervisorCheckIntervalMs`            | 60000                                    | periodic check interval (1 minute, read-only, zero cost) |
 | `supervisorStalledMs`                  | 240000                                   | stalled detection threshold (4 minutes without lane changes) |
-| `locale`                               | `auto`                                   | supervisor notification/prompt language: `auto` (detect from session) / `zh-CN` / `en`. Switchable at runtime by text, persisted to `.buju/config.json` (see §3.5) |
+| `locale`                               | `auto`                                   | supervisor notification/prompt language: `auto` (detect from session) / `zh-CN` / `en`. Switchable at runtime by text, persisted to `.taskswarm/config.json` (see §3.5) |
 
-### 3.5 Repository-level Config File (`.buju/config.json`)
+### 3.5 Repository-level Config File (`.taskswarm/config.json`)
 
-Runtime settings set by text persist in `<repo>/.buju/config.json` and **survive restarts**.
+Runtime settings set by text persist in `<repo>/.taskswarm/config.json` and **survive restarts**.
 Precedence: **config.json (runtime, latest intent) > plugin `Config` (installer default) > built-in default**.
 
 | Key | Value | How to set (by text) |
 |---|---|---|
-| `locale` | `zh-CN` / `en` (`auto` is expressed by removing the key) | "use English" / "use Chinese" / "restore auto" → `buju_supervisor_locale` tool |
-| `reportIntervalMinutes` | integer ≥ 0 (0 = off) | "report every 15 minutes" → `buju_supervisor_report_interval` tool |
+| `locale` | `zh-CN` / `en` (`auto` is expressed by removing the key) | "use English" / "use Chinese" / "restore auto" → `tswarm_supervisor_locale` tool |
+| `reportIntervalMinutes` | integer ≥ 0 (0 = off) | "report every 15 minutes" → `tswarm_supervisor_report_interval` tool |
 
 Candidate future keys (design slots, read at engine creation): `supervisorMode`,
 `workerModel`, `reviewerModel`, `includeDoneTasks`. The file is merge-written JSON,
@@ -155,8 +155,8 @@ zh-CN, otherwise → en; no signal falls back to zh-CN).
 
 ### 4.1 Creation
 
-- Quick example: `/buju-init` (scaffolds `EXAMPLE-001-hello-world`, `EXAMPLE-002-parallel-smoke`;
-  passing a prefix like `/buju-init WEB` generates WEB-001/WEB-002).
+- Quick example: `/tswarm-init` (scaffolds `EXAMPLE-001-hello-world`, `EXAMPLE-002-parallel-smoke`;
+  passing a prefix like `/tswarm-init WEB` generates WEB-001/WEB-002).
 - In an empty project, `start all` also auto-initializes example tasks (`autoInitIfEmpty`).
 - Hand-written: create a `<ID>-<slug>/` directory under `tasks/`, and put `PROMPT.md` + `STATUS.md` in it.
 
@@ -216,9 +216,9 @@ otherwise the lane is judged failed (`task not marked done`). `.DONE` is created
 
 ### 5.2 Periodic Reports
 
-- Off by default; enabled when the operator says "report every X minutes" (`buju_supervisor_report_interval`).
+- Off by default; enabled when the operator says "report every X minutes" (`tswarm_supervisor_report_interval`).
 - 0 = off; after setting, the report fires at the first complete interval, not immediately.
-- The interval persists to `.buju/config.json` (`reportIntervalMinutes`) and **survives restarts**;
+- The interval persists to `.taskswarm/config.json` (`reportIntervalMinutes`) and **survives restarts**;
   the copy follows the current language (`locale`), bilingual.
 
 ### 5.3 Worker Session Logs (the Scene for Troubleshooting Failures/Stalls)
@@ -227,15 +227,15 @@ Worker session directories are named by escaping the lane worktree absolute path
 
 ```bash
 ls ~/.dsh/sessions/--<worktree path with / replaced by - >--/
-# example: --Users-robin-myProject-dsh-buju-.buju-worktrees-demo-006--
+# example: --Users-robin-myProject-taskswarm-.taskswarm-worktrees-demo-006--
 # under it, session-*/session.jsonl(.zstd) hold the full conversation/tool-call records
 ```
 
 ### 5.4 mailbox Troubleshooting (What the Worker Is Saying)
 
 ```bash
-ls .buju/mailbox/<batchId>/supervisor/inbox/      # unprocessed messages
-ls .buju/mailbox/<batchId>/supervisor/ack/        # acked messages
+ls .taskswarm/mailbox/<batchId>/supervisor/inbox/      # unprocessed messages
+ls .taskswarm/mailbox/<batchId>/supervisor/ack/        # acked messages
 # each file is json: { from, type, payload }; type ∈ notify/escalate/request/broadcast/reply
 ```
 
@@ -253,34 +253,34 @@ ls .buju/mailbox/<batchId>/supervisor/ack/        # acked messages
 
 ```bash
 git worktree list                        # all worktrees (<taskId> ones other than _orch are lane leftovers)
-git branch | grep -E 'buju/'             # lane branches (buju/orch is resident — don't touch it)
-ls .buju/batches/ 2>/dev/null            # historical/leftover batch records
-ls .buju/mailbox/ 2>/dev/null            # historical/leftover mailbox
-ls .buju/worktrees/                      # everything other than _orch is lane worktree leftover
+git branch | grep -E 'taskswarm/'             # lane branches (taskswarm/orch is resident — don't touch it)
+ls .taskswarm/batches/ 2>/dev/null            # historical/leftover batch records
+ls .taskswarm/mailbox/ 2>/dev/null            # historical/leftover mailbox
+ls .taskswarm/worktrees/                      # everything other than _orch is lane worktree leftover
 ```
 
-### 6.2 Deleting Leftover Lane Branches (Safe Precondition: Already Merged into buju/orch)
+### 6.2 Deleting Leftover Lane Branches (Safe Precondition: Already Merged into taskswarm/orch)
 
 `git branch -d` only recognizes "merged into the current branch (master)"; lane branches were only merged
-into `buju/orch`, so `-d` refuses. **Verify each one is merged into orch first, then use `-D`**:
+into `taskswarm/orch`, so `-d` refuses. **Verify each one is merged into orch first, then use `-D`**:
 
 ```bash
 # verify (do for every branch; delete only when it prints MERGED)
-git merge-base --is-ancestor buju/<taskId> buju/orch && echo "MERGED: <taskId>"
+git merge-base --is-ancestor taskswarm/<taskId> taskswarm/orch && echo "MERGED: <taskId>"
 # delete (only after verified safe)
-git branch -D buju/<taskId>
+git branch -D taskswarm/<taskId>
 ```
 
 > Why it's safe: `merge-base --is-ancestor` returning true = all commits of that branch are already on
-> `buju/orch`, so nothing is lost. Before batch-deleting, list the verification results for the operator.
+> `taskswarm/orch`, so nothing is lost. Before batch-deleting, list the verification results for the operator.
 
 ### 6.3 Deleting Leftover Worktrees
 
 ```bash
 # first check for uncommitted/not-yet-committed work (salvage first, see §8.2)
-git -C .buju/worktrees/<taskId> status --short
+git -C .taskswarm/worktrees/<taskId> status --short
 # delete only after confirming no valuable content
-git worktree remove --force .buju/worktrees/<taskId>
+git worktree remove --force .taskswarm/worktrees/<taskId>
 git worktree prune          # clean orphan entries from the registry
 ```
 
@@ -291,7 +291,7 @@ git worktree prune          # clean orphan entries from the registry
 ### 6.4 Clearing the mailbox
 
 ```bash
-rm -rf .buju/mailbox/<batchId>
+rm -rf .taskswarm/mailbox/<batchId>
 ```
 
 The mailbox is just inter-agent message files; deleting has no side effects (the engine drains it when
@@ -300,17 +300,17 @@ ending; crash leftovers can be deleted directly).
 ### 6.5 Clearing Batch Records (Tradeoffs)
 
 ```bash
-rm .buju/batches/<batchId>.json
+rm .taskswarm/batches/<batchId>.json
 ```
 
-- After deletion, `/buju-status` returns to "No Buju batch yet", and you can cleanly start a new batch.
-- **Tradeoff**: the dashboard's data source is `.buju/batches/*.json` — deleting it makes the batch disappear
+- After deletion, `/tswarm-status` returns to "No TaskSwarm batch yet", and you can cleanly start a new batch.
+- **Tradeoff**: the dashboard's data source is `.taskswarm/batches/*.json` — deleting it makes the batch disappear
   from dashboard history. If you want to keep audit history, keep the file (changing phase to `aborted` is
   more honest, see §7.4 step 2).
 
 ### 6.6 Things You Must Not Touch
 
-- The `buju/orch` branch and `.buju/worktrees/_orch/` — engine infrastructure; if deleted the engine
+- The `taskswarm/orch` branch and `.taskswarm/worktrees/_orch/` — engine infrastructure; if deleted the engine
   auto-recreates them, but there's no need.
 - The `.DONE` / `STATUS.md` artifacts of already-merged task directories, and uncommitted `src/` changes —
   these are not "leftovers".
@@ -332,10 +332,10 @@ Determination: in the batch json, `lane.error` + `log` give the reason. Three co
 Rerunning a failed lane (not-done tasks are re-scanned by default):
 
 ```
-/buju <taskId>       # or buju_supervisor_control start scope=<taskId>
+/tswarm <taskId>       # or tswarm_supervisor_control start scope=<taskId>
 ```
 
-Because the `buju/<taskId>` branch still exists, the new worktree **attaches the old branch** — continuing
+Because the `taskswarm/<taskId>` branch still exists, the new worktree **attaches the old branch** — continuing
 from old checkpoints rather than from scratch.
 
 ### 7.2 REVISE (phase=review)
@@ -348,7 +348,7 @@ When the reviewer's conclusion is REVISE, the lane enters `review` and the task 
 
 ### 7.3 After abort
 
-- Batch phase=`aborted`; lane worktrees have been removed by the engine; **`buju/<taskId>` branches remain**.
+- Batch phase=`aborted`; lane worktrees have been removed by the engine; **`taskswarm/<taskId>` branches remain**.
 - Handling: verify each is merged then delete the branch per §6.2; delete the mailbox per §6.4; keep the batch
   record (history) or delete it.
 - Want to continue: abort is a terminal state, **resuming is not supported** — salvage the outputs (§8), then
@@ -356,7 +356,7 @@ When the reviewer's conclusion is REVISE, the lane enters `review` and the task 
 
 ### 7.4 After a Process Crash / Restart (the Most Important Recovery Scenario)
 
-Symptoms: after restart, `/buju-status` shows the batch phase stuck at `running` (or planning/paused), but
+Symptoms: after restart, `/tswarm-status` shows the batch phase stuck at `running` (or planning/paused), but
 `abort`/`resume`/`pause` all report "No running batch" (engine memory is empty), and the supervisor's
 `start` rejects a new batch due to the phase=running/planning protection.
 
@@ -364,22 +364,22 @@ Symptoms: after restart, `/buju-status` shows the batch phase stuck at `running`
 
 ```bash
 # ① take stock of the scene: batch state + leftovers
-cat .buju/batches/<batchId>.json        # see which lanes are merged / failed / running
+cat .taskswarm/batches/<batchId>.json        # see which lanes are merged / failed / running
 git worktree list
-git branch | grep -E 'buju/'
+git branch | grep -E 'taskswarm/'
 
 # ② change the stuck batch's phase to aborted (or delete the record file) — unlock the start protection
 #    change "phase": "aborted" in the json (terminal semantics; dashboard history is also kept)
 
-# ③ salvage valuable outputs (§8) — checkpoints of failed/running lanes are on the buju/<taskId> branch
+# ③ salvage valuable outputs (§8) — checkpoints of failed/running lanes are on the taskswarm/<taskId> branch
 
 # ④ clean up leftovers: after verifying merge, delete lane branches (§6.2), leftover worktrees (§6.3), and the mailbox (§6.4)
 
 # ⑤ re-plan the remaining work
-/buju-plan all            # see which tasks remain (failed/pending get re-scanned)
+/tswarm-plan all            # see which tasks remain (failed/pending get re-scanned)
 
 # ⑥ start a new batch (scope the remaining tasks to avoid re-running already-merged ones)
-/buju <remaining task IDs...> or buju_supervisor_control start scope=<taskId>
+/tswarm <remaining task IDs...> or tswarm_supervisor_control start scope=<taskId>
 ```
 
 Key point: crash recovery = **salvage first, then clean up, then rerun** — don't reverse the order
@@ -391,7 +391,7 @@ Key point: crash recovery = **salvage first, then clean up, then rerun** — don
   (tier0_known, do it automatically).
 - **`could not create lane worktree`**: old leftovers blocking. The engine has built-in cleanup (KI-004 fix);
   if it still fails, manually `git worktree prune` + clean same-named branches/directories per §6.2/§6.3, then retry.
-- **dashboard fails to start**: `buju_dashboard` reports outputs not merged → run `integrate` first;
+- **dashboard fails to start**: `tswarm_dashboard` reports outputs not merged → run `integrate` first;
   port occupied → the engine auto-avoids, or specify manually with `--port`.
 - **worker has no tools / sandbox approval popups**: fixed (KI-002/KI-005); worker sessions carry
   full-access + no approval by default; GUI sessions and global configuration are unaffected. If it still
@@ -403,28 +403,28 @@ Key point: crash recovery = **salvage first, then clean up, then rerun** — don
 
 "Salvage" = retrieving the **work already produced** from failed lanes / crashed processes and landing it.
 Project precedent: WEB-006 (cli-integration) salvaged the dashboard server during the batch;
-`/buju-dashboard` in `src/orchestrator/index.ts` is "ported from WEB-006's salvage implementation".
+`/taskswarm-dashboard` in `src/orchestrator/index.ts` is "ported from WEB-006's salvage implementation".
 
 ### 8.1 Where the Salvageable Artifacts Are
 
 | Artifact location                              | When it exists                 | How to retrieve                                                     |
 | --------------------------------------- | ---------------------- | ------------------------------------------------------------- |
-| checkpoint commits on the `buju/<taskId>` branch | committed before worker exit/crash | `git log --oneline buju/<taskId>`; the content is on the branch |
-| uncommitted files in the lane worktree          | not committed before the crash | `git -C .buju/worktrees/<taskId> status` → commit/stash first, then clean up |
-| lane outputs already merged on `buju/orch`      | the parts merged successfully within waves | final unified `integrate`                              |
+| checkpoint commits on the `taskswarm/<taskId>` branch | committed before worker exit/crash | `git log --oneline taskswarm/<taskId>`; the content is on the branch |
+| uncommitted files in the lane worktree          | not committed before the crash | `git -C .taskswarm/worktrees/<taskId> status` → commit/stash first, then clean up |
+| lane outputs already merged on `taskswarm/orch`      | the parts merged successfully within waves | final unified `integrate`                              |
 
 ### 8.2 Salvage Steps
 
 ```bash
 # ① list the checkpoints on the failed lane's branch
-git log --oneline buju/<taskId>
+git log --oneline taskswarm/<taskId>
 
 # ② inspect the artifacts (diff against master, or check out to a temporary location)
-git diff master buju/<taskId> --stat
+git diff master taskswarm/<taskId> --stat
 
 # ③ choose a way to land them:
 #   a) manually merge into orch (lands together with the later integrate)
-#      git -C .buju/worktrees/_orch merge --no-edit buju/<taskId>
+#      git -C .taskswarm/worktrees/_orch merge --no-edit taskswarm/<taskId>
 #   b) cherry-pick key commits onto the current branch
 #      git cherry-pick <commit>
 #   c) simply rerun the task to continue (checkpoints carried over automatically, §7.1)
@@ -432,11 +432,11 @@ git diff master buju/<taskId> --stat
 
 ### 8.3 Formal Landing: integrate
 
-After the batch completes (or after salvaged outputs are merged into orch), merge `buju/orch` into the
+After the batch completes (or after salvaged outputs are merged into orch), merge `taskswarm/orch` into the
 working branch:
 
 ```
-/buju-integrate        # = git merge --no-edit buju/orch
+/tswarm-integrate        # = git merge --no-edit taskswarm/orch
 ```
 
 This is the **only official entry point** for lane outputs (including salvaged ones) to reach the working
@@ -453,7 +453,7 @@ The AI uses this to decide which actions can be done automatically and which mus
 
 | Classification               | Actions included                                                                                              | Autonomy rule                 |
 | --------------------- | --------------------------------------------------------------------------------------------------------------------- | ------------------ |
-| **diagnostic** (always allowed) | read `.buju/batches/*.json`, `tasks/*/STATUS.md`, lane logs; `git status/log/diff/worktree list`; run tests; `buju_supervisor_status` | just do it at all levels |
+| **diagnostic** (always allowed) | read `.taskswarm/batches/*.json`, `tasks/*/STATUS.md`, lane logs; `git status/log/diff/worktree list`; run tests; `tswarm_supervisor_status` | just do it at all levels |
 | **tier0_known** (known recovery) | retry failed merges; resume / pause; clear `.git/index.lock`; clean stale worktrees before retrying                        | automatic in supervised |
 | **destructive** (needs confirmation) | abort; integrate; `git reset / checkout -B / branch -D`; `git worktree remove`; modify STATUS/.DONE/batch state files; skip tasks/waves | ask for one line of confirmation in supervised |
 
@@ -467,9 +467,9 @@ The AI uses this to decide which actions can be done automatically and which mus
 3. **Dependency cycles**: when layering is impossible, force waves in the remaining order (shown as the same
    wave); the task package needs manual fixing.
 4. **start protection**: the supervisor's start refuses to open a new batch while phase=running/planning;
-   the `/buju` command itself has no protection — running `/buju` directly after a crash opens a new batch
+   the `/tswarm` command itself has no protection — running `/tswarm` directly after a crash opens a new batch
    that collides with leftovers; recover per §7.4 first.
-5. **Empty project**: `start all` / `/buju all` auto-scaffold example tasks (EXAMPLE-001/002).
+5. **Empty project**: `start all` / `/tswarm all` auto-scaffold example tasks (EXAMPLE-001/002).
 6. **scope syntax**: `all` | task IDs (e.g. `DEMO-004`) | paths (absolute/relative), space-separated
    multiple tokens; matches task IDs or directory names.
 7. **Rerunning completed tasks**: tasks with `.DONE` are scanned only when configured with

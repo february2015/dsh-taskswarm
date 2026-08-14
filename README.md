@@ -1,8 +1,8 @@
-# Buju（布局）
+# TaskSwarm（布局）
 
 **Multi-agent task orchestration for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai).**
 
-Buju arranges a batch of tasks into dependency-ordered **waves**, runs multiple AI workers in **parallel lanes** isolated by git worktrees, then automatically reviews and merges their output.
+TaskSwarm arranges a batch of tasks into dependency-ordered **waves**, runs multiple AI workers in **parallel lanes** isolated by git worktrees, then automatically reviews and merges their output.
 
 > 布局 (bùjú) is a Go term: before placing a stone, lay out the whole board, then let every stone advance in its own position — exactly what this project does: **plan the waves first, then execute in parallel**.
 
@@ -13,13 +13,13 @@ Buju arranges a batch of tasks into dependency-ordered **waves**, runs multiple 
 ## Features
 
 - **Waves / Lanes parallel orchestration** — tasks are topologically layered by their dependency DAG into waves; tasks within a wave run concurrently
-- **Git worktree isolation** — every task (lane) works in its own worktree; results are merged into the `buju/orch` integration branch
+- **Git worktree isolation** — every task (lane) works in its own worktree; results are merged into the `taskswarm/orch` integration branch
 - **Task packets** — each task is a `PROMPT.md` (mission / steps / constraints) + `STATUS.md` (progress), giving workers durable memory across context resets
 - **Checkpoint discipline** — automatic git commits at step boundaries; a crashed worker never loses committed work
 - **Cross-model review** — an independent reviewer scores each task per its `Review Level`; PASS merges, REVISE sends it back for revision
 - **File mailbox** — workers and supervisor communicate asynchronously (notify / escalate / request) without shared context
-- **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard); notifications and the prompt are **bilingual (中文 / English)** — say "use English" to switch, auto-detected from your session language, persisted to `.buju/config.json` across restarts
-- **Web Dashboard** — local realtime dashboard, zero-dependency node:http + SSE, multiple instances with automatic port negotiation
+- **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard); notifications and the prompt are **bilingual (中文 / English)** — say "use English" to switch, auto-detected from your session language, persisted to `.taskswarm/config.json` across restarts
+- **Web Dashboard** — local realtime dashboard, zero-dependency node:http + SSE, multiple instances with automatic port negotiation. **Auto-starts when a batch starts and prints the link in chat** — one dashboard per workspace, ever (an already-running instance is reused, never duplicated)
 - **Crash-recoverable** — durable disk state + checkpoints + retained lane branches; after a kill/restart you can salvage work, clean up residue, and re-run
 
 ## Quick Start
@@ -28,13 +28,13 @@ Buju arranges a batch of tasks into dependency-ordered **waves**, runs multiple 
 
 ```bash
 # npm registry
-dsh plugin --profile web add dsh-buju
+dsh plugin --profile web add dsh-taskswarm
 
 # GitHub
-dsh plugin --profile web add https://github.com/february2015/dsh-buju.git
+dsh plugin --profile web add https://github.com/february2015/taskswarm.git
 
 # Local directory (development / offline)
-git clone https://github.com/february2015/dsh-buju.git && cd dsh-buju
+git clone https://github.com/february2015/taskswarm.git && cd taskswarm
 npm install && npm run build
 dsh plugin --profile web add $(pwd)
 ```
@@ -44,34 +44,41 @@ dsh plugin --profile web add $(pwd)
 ### 2. Scaffold example tasks
 
 ```
-/buju-init        # creates two example task packets (EXAMPLE-001 / EXAMPLE-002)
+/taskswarm-init        # creates two example task packets (EXAMPLE-001 / EXAMPLE-002)
 ```
 
 ### 3. Preview the wave plan (no execution)
 
 ```
-/buju-plan all    # shows tasks grouped into waves by dependency
+/taskswarm-plan all    # shows tasks grouped into waves by dependency
 ```
 
 ### 4. Start a batch
 
 ```
-/buju all         # run all tasks in parallel; or target one: /buju EXAMPLE-002
-/buju-status      # watch progress anytime
+/taskswarm all         # run all tasks in parallel; or target one: /taskswarm EXAMPLE-002
+/taskswarm-status      # watch progress anytime
 ```
 
 ### 5. Open the Dashboard
 
+Starting a batch (`/taskswarm`) **auto-starts the dashboard and prints its link** in the
+session, so you can watch progress while waves run. Manual control is still available:
+
 ```bash
 # from a DSH session (supervisor command)
-/buju-dashboard
+/taskswarm-dashboard
 
 # or standalone CLI — after installing the plugin, the bin is on PATH:
-npx buju-dashboard --root <repo>
+npx taskswarm-dashboard --root <repo>
 
 # or without installing anything, fetched on the fly (after npm publish):
-npx --package dsh-buju buju-dashboard --root <repo> [--port 8100] [--no-open]
+npx --package dsh-taskswarm taskswarm-dashboard --root <repo> [--port 8100] [--no-open]
 ```
+
+> One dashboard per workspace: if one is already running for the same repo
+> (started manually or left over from an earlier session), it is detected and
+> reused — a second instance is never spawned.
 
 ## How It Works
 
@@ -79,41 +86,41 @@ Four roles are orchestrated:
 
 | Role           | Responsibility                                                                              |
 | -------------- | ------------------------------------------------------------------------------------------- |
-| **Supervisor** | Plans waves, schedules lanes, handles events, talks to you (the session that ran `/buju`)   |
+| **Supervisor** | Plans waves, schedules lanes, handles events, talks to you (the session that ran `/taskswarm`)   |
 | **Worker**     | One DSH agent per task, advancing its task packet step by step in an isolated lane worktree |
 | **Reviewer**   | Independent agent reviewing worker output, emitting PASS / REVISE                           |
-| **Merger**     | Merges finished lane output into the `buju/orch` integration branch                         |
+| **Merger**     | Merges finished lane output into the `taskswarm/orch` integration branch                         |
 
 **Git model:**
 
 ```
-buju/orch            ← integration branch: all lane output lands here (persistent — don't delete)
-buju/<taskId>        ← per-lane working branch (holds step checkpoints; removed after merge)
+taskswarm/orch            ← integration branch: all lane output lands here (persistent — don't delete)
+taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; removed after merge)
 ```
 
-**Durable state** (`<repo>/.buju/`):
+**Durable state** (`<repo>/.taskswarm/`):
 
 ```
-.buju/batches/<batchId>.json   # single source of truth for a batch (phase + lanes)
-.buju/mailbox/<batchId>/       # agent-to-agent messages
-.buju/worktrees/_orch/         # integration worktree
-.buju/worktrees/<taskId>/      # per-lane isolated worktrees
+.taskswarm/batches/<batchId>.json   # single source of truth for a batch (phase + lanes)
+.taskswarm/mailbox/<batchId>/       # agent-to-agent messages
+.taskswarm/worktrees/_orch/         # integration worktree
+.taskswarm/worktrees/<taskId>/      # per-lane isolated worktrees
 ```
 
 ## Command Reference
 
 | Command                        | Action                                                |
 | ------------------------------ | ----------------------------------------------------- |
-| `/buju [scope]`                | Start a batch (scope: `all` / task id / path)         |
-| `/buju-plan [scope]`           | Preview wave plan and dependency graph (no execution) |
-| `/buju-status`                 | Show current batch / lane progress                    |
-| `/buju-pause` / `/buju-resume` | Pause after the current wave / resume                 |
-| `/buju-abort`                  | Abort after the current wave (kills running lanes)    |
-| `/buju-deps [scope]`           | Show the dependency graph                             |
-| `/buju-sessions`               | List active lanes and their worktrees                 |
-| `/buju-integrate`              | Merge `buju/orch` into the current working branch     |
-| `/buju-dashboard`              | Start the Web Dashboard                               |
-| `/buju-init [ID]`              | Scaffold example task packets                         |
+| `/taskswarm [scope]`                | Start a batch (scope: `all` / task id / path)         |
+| `/taskswarm-plan [scope]`           | Preview wave plan and dependency graph (no execution) |
+| `/taskswarm-status`                 | Show current batch / lane progress                    |
+| `/taskswarm-pause` / `/taskswarm-resume` | Pause after the current wave / resume                 |
+| `/taskswarm-abort`                  | Abort after the current wave (kills running lanes)    |
+| `/taskswarm-deps [scope]`           | Show the dependency graph                             |
+| `/taskswarm-sessions`               | List active lanes and their worktrees                 |
+| `/taskswarm-integrate`              | Merge `taskswarm/orch` into the current working branch     |
+| `/taskswarm-dashboard`              | Start the Web Dashboard                               |
+| `/taskswarm-init [ID]`              | Scaffold example task packets                         |
 
 > Compatible aliases: `/orch`, `/orch-status` and other `/orch-*` commands are equivalent.
 
@@ -122,7 +129,7 @@ buju/<taskId>        ← per-lane working branch (holds step checkpoints; remove
 **In development (v0.1)** — the core engine and command layer are implemented and tested (`npm install && npm run build && npm test`, 9/9), and verified inside a real DSH process:
 
 - ✅ core unit tests + engine integration tests (parallel waves + worktree isolation + orch merge)
-- ✅ real LLM workers running in parallel (deepseek-v4-flash), checkpoint commits + merge into `buju/orch`
+- ✅ real LLM workers running in parallel (deepseek-v4-flash), checkpoint commits + merge into `taskswarm/orch`
 - ✅ conversational supervisor: event wake-ups + periodic stall detection + verbal command control
 - ✅ Web Dashboard verified live (multiple instances, automatic port negotiation)
 

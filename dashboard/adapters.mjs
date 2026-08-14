@@ -1,11 +1,11 @@
 /**
- * Dashboard data adapter — dsh-buju persisted state → TaskPlane dashboard JSON.
+ * Dashboard data adapter — taskswarm persisted state → TaskPlane dashboard JSON.
  *
- * Translates dsh-buju's durable state (`.buju/batches/<batchId>.json` BatchState,
- * `<tasksRoot>/<ID>-<slug>/PROMPT.md|STATUS.md`, `.buju/mailbox/<batchId>/...`)
+ * Translates taskswarm's durable state (`.taskswarm/batches/<batchId>.json` BatchState,
+ * `<tasksRoot>/<ID>-<slug>/PROMPT.md|STATUS.md`, `.taskswarm/mailbox/<batchId>/...`)
  * into the JSON contract that the TaskPlane frontend (`dashboard/public/app.js`,
  * ported by WEB-001) expects. The contract is fixed from TaskPlane
- * `dashboard/server.cjs` → `buildDashboardState()`; features dsh-buju does not
+ * `dashboard/server.cjs` → `buildDashboardState()`; features taskswarm does not
  * have (runtime registry, telemetry, lane sidecars, supervisor, merge agents,
  * sessions) degrade to empty-state defaults, exactly as the upstream server does
  * when the corresponding data is absent.
@@ -31,24 +31,24 @@
  *
  * batch.wavePlan is `string[][]` — one entry per wave, each an array of taskIds
  * (upstream app.js: `batch.wavePlan.forEach((taskIds, i) => ...)`, and engine.ts
- * persists `wavePlan: wavePlan.map((wave) => [...wave])`). dsh-buju does not
+ * persists `wavePlan: wavePlan.map((wave) => [...wave])`). taskswarm does not
  * persist the wave→task mapping, so the adapter recomputes it from the tasks
  * root via lib/core `scanTasks()` + `buildWaves()`, filtered to the batch's lane
  * taskIds so it always lines up with `batch.lanes[].taskId`.
  *
  * batch.lanes[].laneSessionId is derived from the lane worktree directory name
- * (dsh-buju lane worktrees live at `<stateRoot>/worktrees/<sanitized-task-id>`,
+ * (taskswarm lane worktrees live at `<stateRoot>/worktrees/<sanitized-task-id>`,
  * e.g. `.../web-002`); falls back to `lane-<N>` when no worktree is recorded.
  *
  * ─── Usage ──────────────────────────────────────────────────────────────────
  *   import { buildDashboardState } from './adapters.mjs'
- *   const state = buildDashboardState({ stateRoot: '/path/to/repo/.buju' })
+ *   const state = buildDashboardState({ stateRoot: '/path/to/repo/.taskswarm' })
  *   const specific = buildDashboardState({ stateRoot, batchId: 'b-xxxx' })
  *
  * Pure functions + fs reads only — no HTTP/SSE (that is WEB-003). Zero external
  * dependencies; reuses the tested lib/core parsers (status/discover/task/mailbox).
  *
- * @module buju/dashboard/adapters
+ * @module taskswarm/dashboard/adapters
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
 import { join, basename } from 'node:path'
@@ -68,7 +68,7 @@ const LANE_PHASE_TO_TASK_STATUS = {
 }
 
 /**
- * Empty-state defaults for features dsh-buju does not implement, plus the
+ * Empty-state defaults for features taskswarm does not implement, plus the
  * no-batch object. Mirrors the upstream server.cjs empty branch (which returns
  * { batch: null, sessions, tmuxSessions, laneStates, telemetry, batchTotalCost,
  * supervisor, timestamp }) and additionally pins the runtime V2 keys to their
@@ -95,7 +95,7 @@ export function emptyDashboardState() {
  * Build the full dashboard state object.
  *
  * @param {object} [options]
- * @param {string} [options.stateRoot] - dsh-buju state root (the `.buju` dir).
+ * @param {string} [options.stateRoot] - taskswarm state root (the `.taskswarm` dir).
  *   Required unless the batch state itself provides it.
  * @param {string} [options.batchId]   - explicit batch id; defaults to the
  *   latest batch under `<stateRoot>/batches/` (upstream semantics).
@@ -165,13 +165,13 @@ export function buildDashboardState(options = {}) {
   }
 }
 
-/** Map one dsh-buju LaneState to the upstream lane record shape. */
+/** Map one taskswarm LaneState to the upstream lane record shape. */
 function mapLane(lane) {
   return {
     laneNumber: lane.lane,
     taskId: lane.taskId,
     // Upstream persisted lane records carry taskIds[] — app.js resolves each
-    // lane's task rows from `lane.taskIds`. dsh-buju runs one task per lane.
+    // lane's task rows from `lane.taskIds`. taskswarm runs one task per lane.
     taskIds: [lane.taskId],
     laneSessionId: lane.worktree ? basename(lane.worktree) : `lane-${lane.lane}`,
     worktreePath: lane.worktree || null,
@@ -249,7 +249,7 @@ export function deriveCurrentWaveIndex(wavePlan, lanesByTaskId) {
  * Mailbox adapter: scan `<stateRoot>/mailbox/<batchId>/` and produce the
  * upstream `{ messages, agentIds, auditEvents }` payload.
  *
- * dsh-buju layout (lib/core/mailbox.ts):
+ * taskswarm layout (lib/core/mailbox.ts):
  *   <stateRoot>/mailbox/<batchId>/<session>/{inbox, outbox}
  *   <stateRoot>/mailbox/<batchId>/<session>/inbox/_ack   (acked messages)
  *   <stateRoot>/mailbox/<batchId>/broadcast              (supervisor → all)
@@ -258,7 +258,7 @@ export function deriveCurrentWaveIndex(wavePlan, lanesByTaskId) {
  * _status mapping (per task spec): inbox→pending, ack→delivered, outbox→reply.
  * Messages are sorted by timestamp ascending (upstream `loadMailboxData`).
  *
- * @param {string} stateRoot - the `.buju` state root
+ * @param {string} stateRoot - the `.taskswarm` state root
  * @param {string} batchId   - batch id
  * @returns {{ messages: object[], agentIds: string[], auditEvents: object[] }}
  */
@@ -288,7 +288,7 @@ export function adaptMailbox(stateRoot, batchId) {
     ]) {
       readMessageDir(join(root, session, sub), status, session, false, messages)
     }
-    // dsh-buju ack mechanism moves consumed messages into inbox/_ack/.
+    // taskswarm ack mechanism moves consumed messages into inbox/_ack/.
     readMessageDir(join(root, session, 'inbox', '_ack'), 'delivered', session, false, messages)
   }
 
@@ -328,7 +328,7 @@ function readMessageDir(dir, status, agentDir, isBroadcast, out) {
   }
 }
 
-/** Map a dsh-buju MailboxMessage ({id,from,to,type,payload,ts}) → contract. */
+/** Map a taskswarm MailboxMessage ({id,from,to,type,payload,ts}) → contract. */
 export function adaptMailboxMessage(msg, status, agentDir, isBroadcast = false) {
   const payload = msg.payload
   const timestamp = typeof msg.ts === 'string' ? Date.parse(msg.ts) : 0
@@ -378,7 +378,7 @@ function deriveContent(payload) {
   }
 }
 
-/** Read `<root>/events.jsonl` audit events (dsh-buju does not write these yet). */
+/** Read `<root>/events.jsonl` audit events (taskswarm does not write these yet). */
 function loadAuditEvents(root) {
   const eventsPath = join(root, 'events.jsonl')
   if (!existsSync(eventsPath)) return []

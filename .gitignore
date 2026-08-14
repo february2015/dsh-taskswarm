@@ -1,8 +1,11 @@
 node_modules/
 lib/
 .buju/
+.taskswarm/
 *.log
 
 *.tgz
 .DS_Store
-- /tasks/  # 任务包是运行时数据（.DONE/STATUS 运行产物），不入库；示例见 templates/tasks/
+
+# /tasks/ 任务包是运行时数据（.DONE/STATUS 运行产物），不入库；示例见 templates/tasks/
+/tasks/

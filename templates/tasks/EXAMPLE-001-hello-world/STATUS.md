@@ -19,7 +19,7 @@
 ### Step 1: Create Hello File
 **Status:** ⬜ Not Started
 
-- [ ] Create `hello-buju.md` in worktree root
+- [ ] Create `hello-taskswarm.md` in worktree root
 - [ ] Add title, date, and task ID (EXAMPLE-001)
 
 ---

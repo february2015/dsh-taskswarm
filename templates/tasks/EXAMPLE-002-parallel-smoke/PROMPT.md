@@ -7,7 +7,7 @@
 
 ## Mission
 
-Create a `parallel-buju-EXAMPLE-002.txt` file in the project root containing
+Create a `parallel-taskswarm-EXAMPLE-002.txt` file in the project root containing
 the single line `EXAMPLE-002 parallel-ok`. This task is independent of other
 tasks and must run in its own lane, concurrently with other wave-1 lanes.
 
@@ -22,7 +22,7 @@ tasks and must run in its own lane, concurrently with other wave-1 lanes.
 
 ## File Scope
 
-- `parallel-buju-EXAMPLE-002.txt`
+- `parallel-taskswarm-EXAMPLE-002.txt`
 
 ## Steps
 
@@ -33,7 +33,7 @@ tasks and must run in its own lane, concurrently with other wave-1 lanes.
 
 ### Step 1: Create File
 
-- [ ] Create `parallel-buju-EXAMPLE-002.txt` with the line `EXAMPLE-002 parallel-ok`
+- [ ] Create `parallel-taskswarm-EXAMPLE-002.txt` with the line `EXAMPLE-002 parallel-ok`
 
 ### Step 2: Verification
 
@@ -45,7 +45,7 @@ tasks and must run in its own lane, concurrently with other wave-1 lanes.
 
 ## Completion Criteria
 
-- [ ] `parallel-buju-EXAMPLE-002.txt` exists and contains `EXAMPLE-002 parallel-ok`
+- [ ] `parallel-taskswarm-EXAMPLE-002.txt` exists and contains `EXAMPLE-002 parallel-ok`
 
 ## Git Commit Convention
 

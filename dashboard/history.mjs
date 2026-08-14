@@ -4,7 +4,7 @@
  * Ports the TaskPlane `dashboard/server.cjs` endpoints that the WEB-003 core
  * server deliberately left out (`serveHistory`, `serveHistoryEntry`,
  * `serveStatusMd`, `handleGetPreferences`, `handlePostPreferences`), adapted
- * to dsh-buju's persisted state. Registered through the WEB-003 router
+ * to taskswarm's persisted state. Registered through the WEB-003 router
  * contract:
  *
  *   createRouter() → { on(method, path, handler), handle(req, res) }
@@ -14,7 +14,7 @@
  * parse CLI args and never touches `server.mjs` — all dependencies arrive via
  * `ctx`:
  *
- *   stateRoot — dsh-buju state root (the `.buju` dir). Source of
+ *   stateRoot — taskswarm state root (the `.taskswarm` dir). Source of
  *     `batches/*.json` (history) and `dashboard-preferences.json` (theme).
  *   tasksRoot — tasks root; STATUS.md fallback lookup
  *               (`<tasksRoot>/<taskId>-*` folders).
@@ -23,7 +23,7 @@
  *               the lane.worktree → STATUS.md path.
  *   repoRoot  — optional base for resolving relative `lane.worktree` paths.
  *
- * dsh-buju has no upstream `batch-history.json`: the history list is derived
+ * taskswarm has no upstream `batch-history.json`: the history list is derived
  * on the fly from `<stateRoot>/batches/*.json` (corrupt files are skipped).
  * It has no `worker-conversation-*.jsonl` and no runtime V2 registry, so
  * `/api/conversation/:prefix` and `/api/agent-events/:agentId` return the
@@ -42,7 +42,7 @@
  * Zero external dependencies (node:fs / node:path / node:http request objects
  * only); reuses lib/core `readBatchState`/`batchStateDir` for parsing.
  *
- * @module buju/dashboard/history
+ * @module taskswarm/dashboard/history
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, writeFileSync } from 'node:fs'
 import { join, dirname, resolve, isAbsolute } from 'node:path'
@@ -64,7 +64,7 @@ const PREFERENCES_FILE = 'dashboard-preferences.json'
  * batch, newest `startedAt` first. Corrupt / unparsable files are skipped
  * (never throws).
  *
- * @param {string} [stateRoot] - the `.buju` state root
+ * @param {string} [stateRoot] - the `.taskswarm` state root
  * @returns {Array<{batchId,status,startedAt,endedAt,durationMs,totalWaves,totalTasks,succeededTasks,failedTasks,tokens}>}
  */
 export function listHistory(stateRoot) {
@@ -102,7 +102,7 @@ export function listHistory(stateRoot) {
  * directly. Returns null when the batch does not exist or the id is invalid
  * (path-traversal guard).
  *
- * @param {string} [stateRoot] - the `.buju` state root
+ * @param {string} [stateRoot] - the `.taskswarm` state root
  * @param {string} batchId     - batch id (`/^[\w-]+$/`)
  * @returns {object|null}
  */
@@ -114,7 +114,7 @@ export function getHistoryEntry(stateRoot, batchId) {
 }
 
 /**
- * Derive the compact history record from one dsh-buju BatchState.
+ * Derive the compact history record from one taskswarm BatchState.
  *
  * `status` maps the BatchState phase to the frontend's history vocabulary:
  *   complete + no failed lanes → 'completed'
@@ -123,7 +123,7 @@ export function getHistoryEntry(stateRoot, batchId) {
  *   aborted                   → 'aborted'
  *   running/planning/paused   → the phase itself
  * `durationMs` is ended−started, or now−started while still running (0 when
- * the timestamps are missing/unparsable). `tokens` is pinned to 0 (dsh-buju
+ * the timestamps are missing/unparsable). `tokens` is pinned to 0 (taskswarm
  * has no telemetry).
  */
 function deriveHistorySummary(state) {
@@ -327,7 +327,7 @@ function servePostPreferences(req, res, ctx) {
 }
 
 function serveConversation(req, res) {
-  // dsh-buju has no worker-conversation-*.jsonl: empty NDJSON stream. The
+  // taskswarm has no worker-conversation-*.jsonl: empty NDJSON stream. The
   // frontend renders the empty state ("No conversation events yet…").
   res.writeHead(200, {
     'Content-Type': 'application/x-ndjson; charset=utf-8',
@@ -337,7 +337,7 @@ function serveConversation(req, res) {
 }
 
 function serveAgentEvents(req, res) {
-  // No runtime V2 registry in dsh-buju: empty event array (frontend empty state).
+  // No runtime V2 registry in taskswarm: empty event array (frontend empty state).
   sendJson(res, 200, [])
 }
 

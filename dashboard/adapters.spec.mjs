@@ -1,8 +1,8 @@
 /**
- * Spec for dashboard/adapters.mjs — dsh-buju state → TaskPlane dashboard JSON.
+ * Spec for dashboard/adapters.mjs — taskswarm state → TaskPlane dashboard JSON.
  *
- * Constructs a temporary repo (tasks/ packets + `.buju/batches/` BatchState +
- * `.buju/mailbox/` messages) and asserts the adapter output against the
+ * Constructs a temporary repo (tasks/ packets + `.taskswarm/batches/` BatchState +
+ * `.taskswarm/mailbox/` messages) and asserts the adapter output against the
  * TaskPlane `buildDashboardState()` contract. Zero external dependencies.
  *
  * Run: npm run build && node --test dashboard/adapters.spec.mjs
@@ -19,7 +19,7 @@ import {
 } from './adapters.mjs'
 
 function tmp() {
-  return mkdtempSync(join(tmpdir(), 'buju-web002-'))
+  return mkdtempSync(join(tmpdir(), 'taskswarm-web002-'))
 }
 
 function cleanup(root) {
@@ -86,16 +86,16 @@ function statusMd(id, name, statusLine, currentStep, iteration, boxes) {
   ].join('\n')
 }
 
-/** Write a BatchState JSON under `<root>/.buju/batches/`. */
+/** Write a BatchState JSON under `<root>/.taskswarm/batches/`. */
 function writeBatchState(root, state) {
-  const dir = join(root, '.buju', 'batches')
+  const dir = join(root, '.taskswarm', 'batches')
   mkdirSync(dir, { recursive: true })
   writeFileSync(join(dir, `${state.id}.json`), JSON.stringify(state, null, 2), 'utf-8')
 }
 
-/** Write a dsh-buju mailbox message file at `<root>/.buju/mailbox/<batchId>/<rel>`. */
+/** Write a taskswarm mailbox message file at `<root>/.taskswarm/mailbox/<batchId>/<rel>`. */
 function writeMessage(root, batchId, rel, msg) {
-  const full = join(root, '.buju', 'mailbox', batchId, rel)
+  const full = join(root, '.taskswarm', 'mailbox', batchId, rel)
   mkdirSync(full, { recursive: true })
   const name = `${Date.now()}-${msg.id.slice(0, 8)}.json`
   writeFileSync(join(full, name), JSON.stringify(msg), 'utf-8')
@@ -106,7 +106,7 @@ function makeBatchState(root) {
     id: 'b-test-abc123',
     repoRoot: root,
     tasksRoot: join(root, 'tasks'),
-    stateRoot: join(root, '.buju'),
+    stateRoot: join(root, '.taskswarm'),
     phase: 'running',
     scope: 'ALPHA-001 BETA-002',
     startedAt: '2026-08-13T10:00:00.000Z',
@@ -116,14 +116,14 @@ function makeBatchState(root) {
         lane: 1,
         taskId: 'ALPHA-001',
         phase: 'pending',
-        worktree: join(root, '.buju', 'worktrees', 'alpha-001'),
+        worktree: join(root, '.taskswarm', 'worktrees', 'alpha-001'),
         log: [],
       },
       {
         lane: 2,
         taskId: 'BETA-002',
         phase: 'running',
-        worktree: join(root, '.buju', 'worktrees', 'beta-002'),
+        worktree: join(root, '.taskswarm', 'worktrees', 'beta-002'),
         startedAt: '2026-08-13T10:01:00.000Z',
         log: ['starting BETA-002'],
       },
@@ -148,9 +148,9 @@ test('batch mapping: batchId/phase/waves/wavePlan/lanes align with contract', (t
   const batchState = makeBatchState(root)
   writeBatchState(root, batchState)
 
-  const state = buildDashboardState({ stateRoot: join(root, '.buju') })
+  const state = buildDashboardState({ stateRoot: join(root, '.taskswarm') })
 
-  // Contract fields with dsh-buju defaults.
+  // Contract fields with taskswarm defaults.
   assert.deepEqual(state.laneStates, {})
   assert.deepEqual(state.telemetry, {})
   assert.equal(state.batchTotalCost, 0)
@@ -187,7 +187,7 @@ test('batch mapping: batchId/phase/waves/wavePlan/lanes align with contract', (t
   assert.equal(batch.lanes[0].taskId, 'ALPHA-001')
   assert.deepEqual(batch.lanes[0].taskIds, ['ALPHA-001'])
   assert.equal(batch.lanes[0].laneSessionId, 'alpha-001')
-  assert.equal(batch.lanes[0].worktreePath, join(root, '.buju', 'worktrees', 'alpha-001'))
+  assert.equal(batch.lanes[0].worktreePath, join(root, '.taskswarm', 'worktrees', 'alpha-001'))
   assert.equal(batch.lanes[0].phase, 'pending')
   assert.equal(batch.lanes[1].laneNumber, 2)
   assert.equal(batch.lanes[1].laneSessionId, 'beta-002')
@@ -210,7 +210,7 @@ test('task mapping: statusData.progress from STATUS.md, title, done flag', (t) =
   )
   writeBatchState(root, makeBatchState(root))
 
-  const tasks = buildDashboardState({ stateRoot: join(root, '.buju') }).batch.tasks
+  const tasks = buildDashboardState({ stateRoot: join(root, '.taskswarm') }).batch.tasks
   assert.equal(tasks.length, 2)
 
   const alpha = tasks.find((t) => t.taskId === 'ALPHA-001')
@@ -244,14 +244,14 @@ test('task mapping: statusData.progress from STATUS.md, title, done flag', (t) =
     id: 'b-solo',
     repoRoot: root2,
     tasksRoot: join(root2, 'tasks'),
-    stateRoot: join(root2, '.buju'),
+    stateRoot: join(root2, '.taskswarm'),
     phase: 'running',
     scope: 'ONLY-001',
     startedAt: '2026-08-13T10:00:00.000Z',
     waves: 1,
     lanes: [{ lane: 1, taskId: 'ONLY-001', phase: 'running', log: [] }],
   })
-  const solo = buildDashboardState({ stateRoot: join(root2, '.buju') }).batch.tasks[0]
+  const solo = buildDashboardState({ stateRoot: join(root2, '.taskswarm') }).batch.tasks[0]
   assert.equal(solo.taskId, 'ONLY-001')
   assert.equal(solo.statusData, null)
 })
@@ -264,7 +264,7 @@ test('mailbox: messages mapped, sorted by timestamp, status per dir', (t) => {
     id: batchId,
     repoRoot: root,
     tasksRoot: join(root, 'tasks'),
-    stateRoot: join(root, '.buju'),
+    stateRoot: join(root, '.taskswarm'),
     phase: 'complete',
     scope: 'X-001',
     startedAt: '2026-08-13T10:00:00.000Z',
@@ -298,7 +298,7 @@ test('mailbox: messages mapped, sorted by timestamp, status per dir', (t) => {
     ts: '2026-08-13T12:45:00.000Z',
   })
 
-  const mailbox = buildDashboardState({ stateRoot: join(root, '.buju'), batchId }).mailbox
+  const mailbox = buildDashboardState({ stateRoot: join(root, '.taskswarm'), batchId }).mailbox
   assert.deepEqual(mailbox.auditEvents, [])
   assert.deepEqual(mailbox.agentIds, ['supervisor'])
 
@@ -344,7 +344,7 @@ test('errors/lastError aggregated from lane.error', (t) => {
     id: 'b-fail',
     repoRoot: root,
     tasksRoot: join(root, 'tasks'),
-    stateRoot: join(root, '.buju'),
+    stateRoot: join(root, '.taskswarm'),
     phase: 'running',
     scope: 'FAIL-001',
     startedAt: '2026-08-13T10:00:00.000Z',
@@ -352,7 +352,7 @@ test('errors/lastError aggregated from lane.error', (t) => {
     lanes: [{ lane: 1, taskId: 'FAIL-001', phase: 'failed', error: 'boom', exitCode: 1, log: [] }],
   })
 
-  const batch = buildDashboardState({ stateRoot: join(root, '.buju') }).batch
+  const batch = buildDashboardState({ stateRoot: join(root, '.taskswarm') }).batch
   assert.equal(batch.lanes[0].phase, 'failed')
   assert.equal(batch.lanes[0].error, 'boom')
   assert.deepEqual(batch.errors, [{ lane: 1, taskId: 'FAIL-001', error: 'boom' }])
@@ -363,7 +363,7 @@ test('empty state: no batch → { batch: null } with contract defaults', (t) => 
   const root = tmp()
   t.after(() => cleanup(root))
 
-  // No stateRoot / missing .buju → upstream-style empty object.
+  // No stateRoot / missing .taskswarm → upstream-style empty object.
   const empty = emptyDashboardState()
   assert.equal(empty.batch, null)
   assert.deepEqual(empty.laneStates, {})
@@ -378,14 +378,14 @@ test('empty state: no batch → { batch: null } with contract defaults', (t) => 
   assert.deepEqual(empty.mailbox, { messages: [], agentIds: [], auditEvents: [] })
   assert.equal(typeof empty.timestamp, 'number')
 
-  const fromMissing = buildDashboardState({ stateRoot: join(root, '.buju') })
+  const fromMissing = buildDashboardState({ stateRoot: join(root, '.taskswarm') })
   assert.equal(fromMissing.batch, null)
 
   // Unknown batchId → null batch too.
   const root2 = tmp()
   t.after(() => cleanup(root2))
-  mkdirSync(join(root2, '.buju', 'batches'), { recursive: true })
-  const unknown = buildDashboardState({ stateRoot: join(root2, '.buju'), batchId: 'b-nope' })
+  mkdirSync(join(root2, '.taskswarm', 'batches'), { recursive: true })
+  const unknown = buildDashboardState({ stateRoot: join(root2, '.taskswarm'), batchId: 'b-nope' })
   assert.equal(unknown.batch, null)
 })
 
@@ -404,7 +404,7 @@ test('full state JSON-serializes without exceptions', (t) => {
   )
   writeBatchState(root, makeBatchState(root))
 
-  const state = buildDashboardState({ stateRoot: join(root, '.buju') })
+  const state = buildDashboardState({ stateRoot: join(root, '.taskswarm') })
   const serialized = JSON.stringify(state)
   assert.equal(typeof serialized, 'string')
   assert.ok(serialized.length > 0)
@@ -428,20 +428,20 @@ test('latestBatch selection: lexically-last batch file wins when no batchId give
   t.after(() => cleanup(root))
   writeTask(join(root, 'tasks', 'X-001'), 'X-001', 'X', [], statusMd('X-001', 'X', '🟢 In Progress', 'Step 1', 0, [' ']))
   writeBatchState(root, {
-    id: 'b-aaa', repoRoot: root, tasksRoot: join(root, 'tasks'), stateRoot: join(root, '.buju'),
+    id: 'b-aaa', repoRoot: root, tasksRoot: join(root, 'tasks'), stateRoot: join(root, '.taskswarm'),
     phase: 'complete', scope: 'X-001', startedAt: '2026-08-13T08:00:00.000Z', waves: 1,
     lanes: [{ lane: 1, taskId: 'X-001', phase: 'merged', log: [] }],
   })
   writeBatchState(root, {
-    id: 'b-zzz', repoRoot: root, tasksRoot: join(root, 'tasks'), stateRoot: join(root, '.buju'),
+    id: 'b-zzz', repoRoot: root, tasksRoot: join(root, 'tasks'), stateRoot: join(root, '.taskswarm'),
     phase: 'running', scope: 'X-001', startedAt: '2026-08-13T09:00:00.000Z', waves: 1,
     lanes: [{ lane: 1, taskId: 'X-001', phase: 'running', log: [] }],
   })
   // lib/core latestBatch() = lexically-last `<batchId>.json` filename.
-  const state = buildDashboardState({ stateRoot: join(root, '.buju') })
+  const state = buildDashboardState({ stateRoot: join(root, '.taskswarm') })
   assert.equal(state.batch.batchId, 'b-zzz')
 
   // Explicit batchId wins over latest.
-  const explicit = buildDashboardState({ stateRoot: join(root, '.buju'), batchId: 'b-aaa' })
+  const explicit = buildDashboardState({ stateRoot: join(root, '.taskswarm'), batchId: 'b-aaa' })
   assert.equal(explicit.batch.batchId, 'b-aaa')
 })
