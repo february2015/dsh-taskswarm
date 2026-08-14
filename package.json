@@ -1,7 +1,7 @@
 {
   "name": "dsh-taskswarm",
-  "version": "0.2.1",
-  "description": "TaskSwarm (布局) — multi-agent task orchestration for DeepSeek Harness. Native port of TaskPlane (github.com/HenryLach/taskplane, MIT): waves/lanes parallel execution, git worktree isolation, PROMPT.md/STATUS.md task packets, file mailbox, cross-model review.",
+  "version": "0.2.2",
+  "description": "TaskSwarm (蜂群) — multi-agent task orchestration for DeepSeek Harness. Native port of TaskPlane (github.com/HenryLach/taskplane, MIT): waves/lanes parallel execution, git worktree isolation, PROMPT.md/STATUS.md task packets, file mailbox, cross-model review.",
   "keywords": [
     "deepseek-harness",
     "dsh",

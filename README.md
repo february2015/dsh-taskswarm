@@ -1,10 +1,10 @@
-# TaskSwarm（布局）
+# TaskSwarm（蜂群）
 
 **Multi-agent task orchestration for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai).**
 
 TaskSwarm arranges a batch of tasks into dependency-ordered **waves**, runs multiple AI workers in **parallel lanes** isolated by git worktrees, then automatically reviews and merges their output.
 
-> 布局 (bùjú) is a Go term: before placing a stone, lay out the whole board, then let every stone advance in its own position — exactly what this project does: **plan the waves first, then execute in parallel**.
+> 蜂群 (fēngqún) is a swarm of bees: the queen directs, the workers each buzz on their own task in parallel — exactly what this project does: **the supervisor plans the waves, then every worker advances in its own lane**.
 
 - **License:** MIT
 - **Upstream:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi ecosystem multi-agent orchestration）— this project is a native port

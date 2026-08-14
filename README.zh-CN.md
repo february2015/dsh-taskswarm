@@ -1,8 +1,8 @@
-# TaskSwarm（布局）
+# TaskSwarm（蜂群）
 
 **DeepSeek Harness 上的多智能体任务编排插件** —— 把一批任务按依赖排成波次，让多个 AI worker 在相互隔离的环境里并行执行，再自动评审、合并产出。
 
-> 布局（围棋术语）：落子前先摆全局，再让棋子在各自位置并行推进——正是这个项目做的事：**先规划波次、再并行执行**。
+> 蜂群（自然隐喻）：蜂后指挥全局，工蜂各自埋头推进自己的任务，成百上千个个体并行协作——正是这个项目做的事：**supervisor 先规划波次，worker 再在自己的 lane 里并行执行**。
 
 - **License:** MIT
 - **上游:** [TaskPlane](https://github.com/HenryLach/taskplane)（Pi 生态多智能体编排）—— 本项目的原生移植
