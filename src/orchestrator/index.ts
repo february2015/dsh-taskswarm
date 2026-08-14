@@ -58,6 +58,9 @@ export interface Config {
   supervisorStalledMs?: number
   /** supervisor 通知/提示词语言：'auto'（默认，按会话语言检测）| 'zh-CN' | 'en'。.buju/config.json 的运行时设置优先。 */
   locale?: 'auto' | 'zh-CN' | 'en'
+  /** 单 lane 看门狗超时（分钟），默认 90：worker 超时无完成事件 → 强制结束该 lane（failed），
+   *  防止失联 worker 卡死 wave、批次只能靠重启引擎恢复（KI-007 方案 B）。0 = 禁用。 */
+  laneTimeoutMinutes?: number
 }
 
 export const Config: z<Config> = z.object({
@@ -74,6 +77,7 @@ export const Config: z<Config> = z.object({
   supervisorCheckIntervalMs: z.number().default(60_000),
   supervisorStalledMs: z.number().default(240_000),
   locale: z.union([z.const('auto'), z.const('zh-CN'), z.const('en')]).default('auto'),
+  laneTimeoutMinutes: z.number().default(90),
 })
 
 interface EngineRef {
@@ -296,6 +300,7 @@ export function apply(ctx: Context, config: Config): void {
       tasksRoot,
       stateRoot,
       host,
+      laneTimeoutMinutes: config.laneTimeoutMinutes,
       ...(config.workerModel ? { workerModel: config.workerModel } : {}),
       ...(config.reviewerModel ? { reviewerModel: config.reviewerModel } : {}),
       includeDoneTasks: config.includeDoneTasks,

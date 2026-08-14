@@ -28,12 +28,13 @@ import { defineTool } from '@deepseek-ai/dsh-tools'
 import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
-import { existsSync, readdirSync, statSync } from 'node:fs'
+import { existsSync, readdirSync, statSync, readFileSync } from 'node:fs'
 import { spawn, type ChildProcess } from 'node:child_process'
 import { fileURLToPath } from 'node:url'
 import type { BujuEvent, BujuEngine } from './engine.ts'
-import { formatBatchStatus, type BatchState } from '../core/status.ts'
-import { formatWavePlan } from '../core/discover.ts'
+import { formatBatchStatus, type BatchState, type LaneState } from '../core/status.ts'
+import { formatWavePlan, scanTasks, buildWaves } from '../core/discover.ts'
+import type { TaskPacket } from '../core/task.ts'
 import { messages, detectLocaleFromSession, type Locale, type LocaleState } from './i18n.ts'
 import { writeSetting, removeSetting, repoConfigPath } from './settings.ts'
 
@@ -231,17 +232,85 @@ export function supervisorEventReport(event: BujuEvent, state: BatchState | null
   return [
     eventHeadline(event, locale),
     '',
-    state ? compactBatchStatus(state) : m.noBatchState,
+    state ? compactBatchStatus(state, locale) : m.noBatchState,
     state ? `\n${m.etaLabel}${estimateEta(state, locale)}` : '',
   ].join('\n')
 }
 
-/** 精简版批次状态（supervisor 消息用）：batch id + phase + lane 列表，去掉完整时间戳/scope 冗余。 */
-export function compactBatchStatus(state: BatchState): string {
+/**
+ * 从 batch lanes 重算波次计划（与 dashboard adapter 同源）：按 lane 的 taskId
+ * 从 tasks root 扫描任务并拓扑分层，保证 wavePlan 与 batch.lanes 对齐。
+ * 兜底：lanes 存在但任务根目录扫不到时，全部塞进单波保持可读。
+ */
+function recomputeWavePlan(state: BatchState): string[][] {
+  const laneTaskIds = state.lanes.map((l) => l.taskId)
+  const byTaskId = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d]))
+  const batchTasks = laneTaskIds
+    .map((tid) => byTaskId.get(tid)?.task)
+    .filter((t): t is TaskPacket => !!t)
+  let wavePlan = buildWaves(batchTasks).waves.map((wave) => wave.map((t) => t.id))
+  if (wavePlan.length === 0 && laneTaskIds.length > 0) wavePlan = [[...laneTaskIds]]
+  return wavePlan
+}
+
+/**
+ * 当前执行波次索引（0-based）。优先含 running/review lane 的波（执行中）；
+ * 无执行中 lane 时取第一个含 pending lane 的波（波次边界/即将执行）；
+ * 全部完成时取最后一波。
+ */
+export function currentWaveIndex(wavePlan: string[][], lanes: LaneState[]): number {
+  const byTask = new Map(lanes.map((l) => [l.taskId, l]))
+  for (let i = 0; i < wavePlan.length; i++) {
+    if (wavePlan[i].some((tid) => {
+      const l = byTask.get(tid)
+      return !!l && (l.phase === 'running' || l.phase === 'review')
+    })) return i
+  }
+  for (let i = 0; i < wavePlan.length; i++) {
+    if (wavePlan[i].some((tid) => {
+      const l = byTask.get(tid)
+      return !!l && l.phase === 'pending'
+    })) return i
+  }
+  return Math.max(0, wavePlan.length - 1)
+}
+
+/**
+ * 任务步骤进度 `checked/total`：优先读 lane worktree 里的 STATUS.md（worker
+ * 实时更新），回退任务包目录。STATUS.md 缺失或无清单项时返回 ''（不展示）。
+ */
+export function laneProgress(lane: LaneState, taskFolders: Map<string, string>): string {
+  const dir = lane.worktree && existsSync(join(lane.worktree, 'STATUS.md')) ? lane.worktree : taskFolders.get(lane.taskId)
+  if (!dir) return ''
+  let content: string
+  try {
+    content = readFileSync(join(dir, 'STATUS.md'), 'utf-8')
+  } catch {
+    return ''
+  }
+  const checked = (content.match(/- \[x\]/gi) || []).length
+  const unchecked = (content.match(/- \[ \]/g) || []).length
+  const total = checked + unchecked
+  return total > 0 ? `${checked}/${total}` : ''
+}
+
+/**
+ * 精简版批次状态（supervisor 消息用）：batch id + phase + 当前 Wave 行 +
+ * 只列当前执行波次内的 lane（每行带步骤进度 checked/total），
+ * 去掉完整时间戳/scope 冗余与未开始波次的 lane。
+ */
+export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'): string {
   const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped').length
   const lines = [`Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} lanes done)`]
+  const wavePlan = recomputeWavePlan(state)
+  const waveIdx = currentWaveIndex(wavePlan, state.lanes)
+  lines.push(`  ${messages(locale).waveHeader(waveIdx + 1, wavePlan.length)}`)
+  const current = new Set(wavePlan[waveIdx] ?? [])
+  const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const l of state.lanes) {
-    lines.push(`  lane ${l.lane} [${l.phase}] ${l.taskId}`)
+    if (!current.has(l.taskId)) continue
+    const progress = laneProgress(l, taskFolders)
+    lines.push(`  lane ${l.lane} [${l.phase}] ${l.taskId}${progress ? ` ${progress}` : ''}`)
   }
   return lines.join('\n')
 }
@@ -385,6 +454,15 @@ export function registerSupervisor(
           return { ok, text: ok ? 'Batch will pause after the current wave.' : 'No running batch to pause.' }
         }
         case 'abort': {
+          // abort 是批次级操作：scope 不生效，会终止整个批次（含未启动 lane）。
+          // 带 scope 调用时先明确提示，避免 supervisor 误以为可以只 abort 单个 lane。
+          const scope = (args.scope as string | undefined)?.trim()
+          if (scope) {
+            return {
+              ok: false,
+              text: `abort 是批次级操作：scope（${scope}）不生效，会终止整个批次（含所有未完成 lane）与运行中的 worker。确认要终止整个批次请不带 scope 再次执行 abort；仅想释放单个失联 lane 的调度槽，见 runbook §7.6（手动收尾 + 重启引擎，KI-007）。`,
+            }
+          }
           const ok = engine.abort()
           return { ok, text: ok ? 'Batch abort requested.' : 'No running batch to abort.' }
         }
@@ -683,7 +761,7 @@ export function startPeriodicSupervision(
     // 定时汇报（默认关闭；operator 要求后按间隔唤醒）
     if (reportIntervalMs > 0 && now - lastReportAt >= reportIntervalMs) {
       lastReportAt = now
-      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state)}\n\n${m.etaLabel}${estimateEta(state, refLocale())}`)
+      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state, refLocale())}\n\n${m.etaLabel}${estimateEta(state, refLocale())}`)
     }
   }
 

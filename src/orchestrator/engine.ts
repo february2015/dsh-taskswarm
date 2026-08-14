@@ -28,7 +28,7 @@ import {
 } from '../core/status.ts'
 import { runGit } from '../core/git.ts'
 import { SUPERVISOR_SESSION, drainInbox, sessionInboxDir, writeMailboxMessage } from '../core/mailbox.ts'
-import type { WorkerHost, LaneSpec } from './worker-host.ts'
+import type { WorkerHost, LaneSpec, WorkerResult } from './worker-host.ts'
 
 export interface BujuEvent {
   type: 'batch-started' | 'lane-done' | 'lane-failed' | 'lane-revise' | 'wave-complete' | 'batch-complete' | 'batch-aborted'
@@ -55,6 +55,10 @@ export interface EngineConfig {
   workerModel?: string
   reviewerModel?: string
   includeDoneTasks?: boolean
+  /** 单 lane 看门狗超时（分钟）：worker 超过该时长无完成事件 → 强制结束该 lane（failed，
+   *  worktree/分支保留可排查），避免失联 worker 永久卡住当前 wave（KI-007 方案 B）。
+   *  0/缺省 = 不启用（不建议，会退回"只能重启引擎"的假死状态）。 */
+  laneTimeoutMinutes?: number
   /** Structured batch-lifecycle events + the owning session agent (who started the batch). */
   onEvent?: (event: BujuEvent, owner?: unknown) => void
 }
@@ -267,7 +271,7 @@ export class BujuEngine {
       reviewerModel: config.reviewerModel,
     }
 
-    const result = await config.host.spawn(spec)
+    const result = await this.runLaneWorker(ctx, lane, spec)
     lane.exitCode = result.exitCode
     if (result.error) lane.error = result.error
     laneLog(lane, `worker exited ${result.exitCode}${result.error ? ` (${result.error})` : ''}`)
@@ -310,6 +314,36 @@ export class BujuEngine {
       ...(lane.error ? { error: lane.error.slice(0, 300) } : {}),
     })
     return lane
+  }
+
+  /** Spawn a lane worker under a watchdog timeout (KI-007 方案 B).
+   *  worker 失联/事件丢失时 `host.spawn()` 的 await 永不返回，会把 execute() 卡死在当前
+   *  wave、后续 wave 永不启动（此前只能靠重启引擎恢复）。超时后 abort worker 并返回
+   *  failed 结果，runLane 正常收尾，wave 继续推进。 */
+  private async runLaneWorker(ctx: RunContext, lane: LaneState, spec: LaneSpec): Promise<WorkerResult> {
+    const { config } = ctx
+    const timeoutMin = config.laneTimeoutMinutes ?? 0
+    if (!(timeoutMin > 0)) return config.host.spawn(spec)
+
+    const timeoutMs = timeoutMin * 60_000
+    let timer: NodeJS.Timeout | undefined
+    const timeout = new Promise<WorkerResult>((resolve) => {
+      timer = setTimeout(() => {
+        // 先 abort 僵尸 worker，再以 failed 收尾（worktree/分支保留供排查）。
+        try {
+          config.host.abort?.(spec.lane)
+        } catch {
+          // best-effort
+        }
+        laneLog(lane, `lane timeout after ${timeoutMin} min (watchdog)`)
+        resolve({ exitCode: 1, text: '', error: `lane timeout after ${timeoutMin} min（worker 无完成事件，看门狗强制结束；检查点保留在 buju/${spec.task.id} 分支）` })
+      }, timeoutMs)
+    })
+    try {
+      return await Promise.race([config.host.spawn(spec), timeout])
+    } finally {
+      if (timer) clearTimeout(timer)
+    }
   }
 
   private readLatestVerdict(taskFolder: string): 'PASS' | 'REVISE' | 'none' {

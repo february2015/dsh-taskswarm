@@ -5,6 +5,44 @@
 
 ## OPEN
 
+（当前无 OPEN 条目——截至 2026-08-14 已记录的已知问题全部修复，见下方 RESOLVED 区。
+新增问题请按上述格式追加到本区。）
+
+---
+
+## RESOLVED
+
+<!-- 修复后把条目移到这里，注明修复版本/commit。 -->
+
+### KI-007: 引擎按 wave 推进且内存状态不重读——lane 全 merged 后后续 wave 不调度，只能重启引擎
+
+- **状态:** ✅ 已修复（v0.1.1 工作区，重启生效；2026-08-14 批次 `b-mss7l7sm-4217b2` 实测）
+- **发现日期:** 2026-08-14
+- **现象:** 批次 wave 1 全部 lane merged（含手动标记的失联 lane）后，wave 2 及后续 lane
+  长时间 `pending`、无 worker 启动、并行度空转；`plan` 已正确重排剩余任务（引擎读到了新
+  状态），但就是不调度；改 `.buju/batches/*.json` 的 lane phase 不生效；`start` 因批次
+  phase=running 拒绝开新批次。唯一恢复手段是重启 DSH 引擎（新开会话）。
+- **根因（代码级确认）:** `engine.ts` `execute()` 顺序遍历 wave，wave 内
+  `Promise.all(wave.map(runLane))` 并行；`runLane()` 第 270 行 `await config.host.spawn(spec)`
+  **无超时**——worker 失联/事件丢失时该 await 永不返回 → execute 卡死在当前 wave →
+  后续 wave 永不启动（不是"wave 判定不读盘"，而是 execute 的 await 挂起）。
+- **修复说明（方案 B 看门狗超时）:**
+  - `engine.ts` 新增 `runLaneWorker()`：对 `host.spawn()` 包 `Promise.race` 超时
+    （`laneTimeoutMinutes`，默认 90 分钟，可配置；0 = 禁用）。超时先 `host.abort(lane)`
+    杀掉僵尸 worker，再返回 `{ exitCode: 1, error: 'lane timeout...' }` → runLane 正常收尾
+    （phase=failed，worktree/分支保留供排查）→ execute 继续下一 wave。**不再需要重启引擎。**
+  - `index.ts` `Config` 新增 `laneTimeoutMinutes`（默认 90）并传入 `EngineConfig`。
+  - **方案 A（reconcile）经分析由 B 覆盖**：execute 顺序执行 wave、无"判定"步骤，卡点是
+    spawn await 无超时；超时解决后手动标记的 lane 会在下一 wave 推进时被天然跳过
+    （`select()` 默认排除已 done 任务，`.DONE` 标记即续跑依据）。不再单独实现 A。
+  - **方案 C（lane 级状态修正工具）未做**（可选）：`buju_supervisor_control` 的 `abort`
+    工具已加**批次级防误伤提示**（scope 非空时明确"abort 是批次级、scope 不生效"并拒绝，
+    防止误 abort 整批），单 lane 释放走 runbook §7.6 手动收尾 + 重启（有 B 后无需重启）。
+- **临时 workaround（修复前）:** runbook §7.6（手动收尾保住代码 → 标记 merged → 重启引擎）。
+- **配置：** `.buju/config.json` 或插件 Config 设 `laneTimeoutMinutes`（分钟）。
+
+---
+
 ### KI-005: worker 直写任务包文件触发沙箱审批
 
 - **状态:** ✅ 已修复（worker 级权限注入，v0.1.1 工作区，重启生效）
@@ -48,41 +86,7 @@
   （actions.jsonl/events.jsonl）、分支保护检测、CI/PR 生命周期、批次摘要
   markdown 模板。事件契约已就位，可在此基础上增量补齐。
 
-### KI-007: 引擎按 wave 推进且内存状态不重读——lane 全 merged 后后续 wave 不调度，只能重启引擎
-
-- **状态:** ⬜ OPEN（2026-08-14 批次 `b-mss7l7sm-4217b2` 实测；workaround 见 runbook §7.6）
-- **发现日期:** 2026-08-14
-- **现象:** 批次 wave 1 全部 lane merged（含手动标记的失联 lane）后，wave 2 及后续 lane
-  长时间 `pending`、无 worker 启动、并行度空转；`plan` 已正确重排剩余任务（引擎读到了新
-  状态），但就是不调度；改 `.buju/batches/*.json` 的 lane phase 不生效；`start` 因批次
-  phase=running 拒绝开新批次。唯一恢复手段是重启 DSH 引擎（新开会话），引擎重启后重新
-  加载批次 JSON，wave 才推进。
-- **根因（推断，待代码确认）:** 引擎调度是**事件驱动 + 内存状态**：`pause` 提示
-  "will pause after the current wave" 证实引擎按 wave 推进；失联 lane（worker 事件丢失）
-  在引擎内存中仍是 `running` → 当前 wave 判定为"未完成" → 后续 wave 永不启动。引擎
-  内存状态不随磁盘批次 JSON 修改而刷新（plan 重算读盘、调度判定用内存，二者不一致）。
-- **相关代码位置:**
-  - `src/orchestrator/engine.ts` — wave 推进与"wave 完成"判定（疑似用内存 lane.phase）
-  - `src/orchestrator/in-process-host.ts` — worker 派生/退出事件上报
-  - `src/core/status.ts` — `updateLane` / `writeBatchState`（磁盘落盘 vs 内存）
-- **候选修复方案（按成本排序）:**
-  - **A（推荐，最小）:** wave 推进判定前**重新加载磁盘批次 JSON**（或对内存 lanes 做
-    reconcile：以磁盘为准修正内存 phase）。失联 lane 被手工标记 merged 后，无需重启即可
-    推进 wave。
-  - **B（防再犯）:** worker **心跳/看门狗**：lane 超过 N 分钟无任何事件 → 自动标记
-    `failed/lost`（保留 worktree/分支供排查），避免 lane 无限期占 running 阻塞调度。
-  - **C（supervisor 工具）:** `buju_supervisor_control` 增加 lane 级状态修正动作
-    （如 `mark <taskId> merged/failed`），走引擎受控路径而非直接改 JSON。
-  - **D（工程化）:** 引擎统一"内存 = 磁盘"（单一写者/串行队列），根治事件丢失导致的
-    状态漂移（与 KI-003 同源工程化方向）。
-- **临时 workaround:** 见 runbook §7.6（手动收尾保住代码 → 标记 merged → 重启引擎恢复
-  调度）。
-
 ---
-
-## RESOLVED
-
-<!-- 修复后把条目移到这里，注明修复版本/commit。 -->
 
 ### KI-004: 进程被杀/abort 后残留 lane worktree 与分支，阻塞下一次 batch
 
@@ -206,8 +210,6 @@
 
 - 不影响规划/命令层（plan/status 正常），仅 worker 执行能力问题。
 - 与 headless 验证成功（README）不矛盾——工具装配差异仅在特定 profile 组合下暴露。
-
----
 
 ---
 

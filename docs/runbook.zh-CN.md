@@ -383,6 +383,11 @@ git branch | grep -E 'buju/'
 
 ### 7.6 假死：lane 已完成但迟迟不 complete（2026-08-14 实测）
 
+> ⚠️ **v0.1.1 起已根治（KI-007）**：引擎带 `laneTimeoutMinutes` 看门狗（默认 90 分钟），
+> worker 超时无完成事件会自动强制结束该 lane（failed）并继续下一 wave，**新批次不再需要
+> 重启引擎**。本流程用于：① 存量僵局批次（如本批 `b-mss7l7sm-4217b2`，引擎无看门狗）；②
+> 手动收尾保住已完成 lane 的代码成果；③ 看门狗被配置为 0（禁用）的环境。
+
 **现象**：lane 显示 100%（步骤全 [x]）但长时间 `[running]` 不进入 merged；批次 JSON 中该 lane
 `log` 只有 `starting <task>`，无 `advance step / worker exited / done` 事件（对比正常 lane 有
 `worker exited 0`）；worker 进程已消失。
