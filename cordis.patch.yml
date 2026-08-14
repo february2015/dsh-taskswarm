@@ -4,10 +4,10 @@
 # Add "taskswarm" to the profile's dsh.profile.bundles to activate /orch-family
 # commands. Config overrides can be layered here, e.g.:
 #
-#   - id: taskswarm-orchestrator
+#   - id: tswarm-orchestrator
 #     config:
 #       tasksRoot: docs/task-management
 #
 - insert:
-    - id: taskswarm-orchestrator
+    - id: tswarm-orchestrator
       name: 'dsh-taskswarm/orchestrator'

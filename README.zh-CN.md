@@ -133,6 +133,12 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 - 📋 待办：上述 Dashboard 功能开发完成后，把本机安装从「本地目录 link 安装」（`dsh plugin add $(pwd)`）切换为 npm 安装（`dsh plugin add taskswarm`），让本地执行环境与本地源代码完全独立——当前 link 安装下二者是同一份文件，改代码即改安装（需 `npm run build` + 重启 dsh web 才生效）
 - 📋 待办：supervisor 的定时状态上报与定时汇报（及给用户的状态汇报）中，附带每个 Lane/任务的执行进度「已完成步数/总步数」（如 3/5）——让用户随时知道每个任务一共多少步、执行到哪一步
 
+## 热更 / HMR 行为
+
+- **配置热更**：TaskSwarm 是标准 DSH bundle，配置在 profile 的 `cordis.patch.yml` 中覆盖后由 DSH 热重载、无需重启。**但注意**：orchestrator 插件被重载时（例如修改它的配置行），卸载清理会 **abort 当前运行中的所有批次**——批次运行期间请勿修改 orchestrator 配置。
+- **源码热更**：DSH 官方在 web profile 上未启用插件源码 HMR（`cordis-plugin-hmr` 默认禁用）；修改 TaskSwarm 源码需 `npm run build` 后**重启 dsh web** 生效。
+- **批次可恢复**：即使重启，`.taskswarm/` 磁盘状态 + 检查点 + lane 分支都会保留；重启后可用 `/orch-status` 查看，并通过 supervisor 恢复或重跑失败 lane，不丢已完成工作。
+
 ## 文档
 
 - **[运维手册（Runbook）](docs/runbook.zh-CN.md)** —— 清理残留 / 错误恢复 / 工作抢救的标准作业程序（supervisor / AI 代理必读）

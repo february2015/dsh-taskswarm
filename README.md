@@ -133,6 +133,12 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 - ✅ conversational supervisor: event wake-ups + periodic stall detection + verbal command control
 - ✅ Web Dashboard verified live (multiple instances, automatic port negotiation)
 
+## Hot Reload / HMR Behavior
+
+- **Config hot-reload**: TaskSwarm is a standard DSH bundle — config overrides layered in the profile's `cordis.patch.yml` are hot-reloaded by DSH without a restart. **Caveat**: reloading the orchestrator plugin (e.g. editing its config row) aborts all running batches via its unload cleanup — do not touch orchestrator config while a batch is running.
+- **Source HMR**: DSH does not enable plugin source HMR on the web profile (`cordis-plugin-hmr` is disabled by default); source changes require `npm run build` followed by a **dsh web restart**.
+- **Batch recovery**: even after a restart, `.taskswarm/` disk state + checkpoints + lane branches persist; check `/orch-status` afterwards and resume/rerun failed lanes through the supervisor without losing completed work.
+
 ## Docs
 
 - **[Runbook (ops)](docs/runbook.md)** — standard operating procedures for cleanup, error recovery, and work salvage (required reading for supervisors / AI agents)

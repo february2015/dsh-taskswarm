@@ -1,6 +1,6 @@
 {
   "name": "dsh-taskswarm",
-  "version": "0.2.3",
+  "version": "0.2.9",
   "description": "TaskSwarm (蜂群) — multi-agent task orchestration for DeepSeek Harness. Native port of TaskPlane (github.com/HenryLach/taskplane, MIT): waves/lanes parallel execution, git worktree isolation, PROMPT.md/STATUS.md task packets, file mailbox, cross-model review.",
   "keywords": [
     "deepseek-harness",
@@ -67,6 +67,7 @@
     "taskswarm-dashboard": "./dashboard/server.mjs"
   },
   "scripts": {
+    "prepare": "npm run build",
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test tests/*.spec.mjs",
     "dashboard": "node dashboard/server.mjs"
