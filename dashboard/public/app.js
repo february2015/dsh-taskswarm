@@ -827,18 +827,30 @@ function renderLanesTasks(batch, sessions) {
     return;
   }
 
-  // 只显示当前执行 wave 及已执行 wave 的 lane；未到 wave（未来 wave）的 lane 不展示。
-  // wavePlan = taskId 分组的 wave 结构；currentWaveIndex = 当前执行 wave（adapters 计算）。
-  // 批次全部终态（完成/失败）时不做过滤，展示全部 lane 供回放。
+  // 只显示「当前执行 wave」的 lane；已完成/未开始的 wave 不展示。
+  // 当前 wave 判定：优先取包含 running lane 的 wave；无 running（暂停/间隙）时取第一个
+  // 含非终态 lane 的 wave；批次全部终态（完成/失败）时展示全部 lane 供回放。
   const wavePlan = batch.wavePlan || [];
-  const allLaneTerminal = batch.lanes.length > 0 &&
-    batch.lanes.every((l) => ['merged', 'failed', 'review', 'done'].includes(l.phase));
+  const terminalPhase = (p) => ['merged', 'failed', 'review', 'done'].includes(p);
+  const allLaneTerminal = batch.lanes.length > 0 && batch.lanes.every((l) => terminalPhase(l.phase));
   let visibleTaskIds = null;
   if (!allLaneTerminal && wavePlan.length > 0) {
-    const currentWaveIdx = batch.currentWaveIndex ?? 0;
-    visibleTaskIds = new Set();
-    for (let i = 0; i <= currentWaveIdx && i < wavePlan.length; i++) {
-      for (const tid of wavePlan[i] || []) visibleTaskIds.add(tid);
+    const laneByTask = new Map(batch.lanes.map((l) => [l.taskId, l]));
+    let currentWaveIdx = null;
+    // 1) 含 running lane 的 wave = 当前执行 wave
+    for (let i = 0; i < wavePlan.length; i++) {
+      const waveLanes = (wavePlan[i] || []).map((tid) => laneByTask.get(tid)).filter(Boolean);
+      if (waveLanes.some((l) => l.phase === 'running')) { currentWaveIdx = i; break; }
+    }
+    // 2) 无 running（暂停/波次间隙）：第一个含非终态 lane 的 wave（即将执行/待执行）
+    if (currentWaveIdx === null) {
+      for (let i = 0; i < wavePlan.length; i++) {
+        const waveLanes = (wavePlan[i] || []).map((tid) => laneByTask.get(tid)).filter(Boolean);
+        if (waveLanes.some((l) => !terminalPhase(l.phase))) { currentWaveIdx = i; break; }
+      }
+    }
+    if (currentWaveIdx !== null) {
+      visibleTaskIds = new Set(wavePlan[currentWaveIdx] || []);
     }
   }
 
