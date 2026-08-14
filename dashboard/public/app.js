@@ -827,6 +827,21 @@ function renderLanesTasks(batch, sessions) {
     return;
   }
 
+  // 只显示当前执行 wave 及已执行 wave 的 lane；未到 wave（未来 wave）的 lane 不展示。
+  // wavePlan = taskId 分组的 wave 结构；currentWaveIndex = 当前执行 wave（adapters 计算）。
+  // 批次全部终态（完成/失败）时不做过滤，展示全部 lane 供回放。
+  const wavePlan = batch.wavePlan || [];
+  const allLaneTerminal = batch.lanes.length > 0 &&
+    batch.lanes.every((l) => ['merged', 'failed', 'review', 'done'].includes(l.phase));
+  let visibleTaskIds = null;
+  if (!allLaneTerminal && wavePlan.length > 0) {
+    const currentWaveIdx = batch.currentWaveIndex ?? 0;
+    visibleTaskIds = new Set();
+    for (let i = 0; i <= currentWaveIdx && i < wavePlan.length; i++) {
+      for (const tid of wavePlan[i] || []) visibleTaskIds.add(tid);
+    }
+  }
+
   const tasks = batch.tasks || [];
   const sessionSet = new Set(sessions || []);
   const laneStates = currentData?.laneStates || {};
@@ -838,6 +853,8 @@ function renderLanesTasks(batch, sessions) {
   let html = "";
 
   for (const lane of batch.lanes) {
+    // 未到 wave（未来 wave）的 lane 隐藏
+    if (visibleTaskIds && !visibleTaskIds.has(lane.taskId)) continue;
     const laneTasks = (lane.taskIds || []).map(tid => tasks.find(t => t.taskId === tid)).filter(Boolean);
     const v2snap = v2Snapshots[lane.laneNumber] || null;
     const laneActiveSegment = laneActiveSegmentInfo(v2snap, laneTasks, segmentStatusMap);
