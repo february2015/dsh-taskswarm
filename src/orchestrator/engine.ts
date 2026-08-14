@@ -334,6 +334,20 @@ export class BujuEngine {
     let timer: NodeJS.Timeout | undefined
     const timeout = new Promise<WorkerResult>((resolve) => {
       timer = setTimeout(() => {
+        // 看门狗触发前先查磁盘：若该 lane 已被手动收尾（supervisor 标记 merged/failed、
+        // 代码已并入分支），则跳过不覆盖——避免看门狗把已完成的 lane 误标 failed
+        // （2026-08-14 JM-334 实测：手动收尾后 90 分钟超时仍覆盖为 failed）。
+        try {
+          const disk = readBatchState(config.stateRoot, ctx.batchId)
+          const dl = disk?.lanes?.find((x) => x.taskId === spec.task.id)
+          if (dl && (dl.phase === 'merged' || dl.phase === 'failed')) {
+            laneLog(lane, `watchdog skipped (lane already ${dl.phase} on disk — manual finalize)`)
+            resolve({ exitCode: 0, text: '', error: undefined })
+            return
+          }
+        } catch {
+          // 磁盘不可读时按常规超时处理
+        }
         // 先 abort 僵尸 worker，再以 failed 收尾（worktree/分支保留供排查）。
         try {
           config.host.abort?.(spec.lane)
