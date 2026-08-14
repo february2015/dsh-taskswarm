@@ -29,10 +29,10 @@
 dsh plugin --profile web add dsh-taskswarm
 
 # GitHub
-dsh plugin --profile web add https://github.com/february2015/taskswarm.git
+dsh plugin --profile web add https://github.com/february2015/dsh-taskswarm.git
 
 # 本地目录（开发/离线）
-git clone https://github.com/february2015/taskswarm.git && cd taskswarm
+git clone https://github.com/february2015/dsh-taskswarm.git && cd dsh-taskswarm
 npm install && npm run build
 dsh plugin --profile web add $(pwd)
 ```

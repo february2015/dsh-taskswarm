@@ -11,7 +11,7 @@
 | 渠道         | 用户怎么装                                                               | 时机                |
 | ---------- | ------------------------------------------------------------------- | ----------------- |
 | **npm**（主） | `dsh plugin add taskswarm` / `npx --package taskswarm taskswarm-dashboard` | 每次发版              |
-| GitHub     | `dsh plugin add https://github.com/february2015/taskswarm.git`       | 保持同步（push master） |
+| GitHub     | `dsh plugin add https://github.com/february2015/dsh-taskswarm.git`       | 保持同步（push master） |
 | 本地 / 离线    | 拷贝或 zip + `npm install && npm run build && dsh plugin add <dir>`    | 开发期               |
 
 ## 前置条件

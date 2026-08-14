@@ -12,7 +12,7 @@
 | Channel | How users install | When |
 |---|---|---|
 | **npm** (primary) | `dsh plugin add taskswarm` / `npx --package taskswarm taskswarm-dashboard` | every release |
-| GitHub | `dsh plugin add https://github.com/february2015/taskswarm.git` | keep in sync (push master) |
+| GitHub | `dsh plugin add https://github.com/february2015/dsh-taskswarm.git` | keep in sync (push master) |
 | local / offline | clone or zip + `npm install && npm run build && dsh plugin add <dir>` | development |
 
 ## Prerequisites
