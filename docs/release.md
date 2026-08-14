@@ -60,6 +60,20 @@ dsh plugin --profile web add taskswarm          # install as plugin (restart dsh
 npx --package taskswarm taskswarm-dashboard --root <repo>   # standalone dashboard CLI
 ```
 
+### Upgrading an existing install
+
+`dsh plugin --profile web add taskswarm` **does not bump** a dependency whose
+lockfile version already satisfies the declared range (`^0.2.9` is satisfied by
+`0.2.9`, so pnpm reports "Already up to date" and stays on the old version).
+To pull a newer version within the range, pin it explicitly:
+
+```bash
+dsh plugin --profile web add dsh-taskswarm@0.2.10    # explicit version always resolves
+# or, inside the profile dir: pnpm update --latest
+```
+
+Then restart `dsh web` for the new version to take effect.
+
 ## Versioning rules
 
 - Semantic versioning; during 0.x any minor bump is acceptable for breaking changes.

@@ -41,6 +41,12 @@ dsh plugin --profile web add $(pwd)
 
 **Restart dsh web** after installing — the plugin takes effect on boot.
 
+> **Upgrading an existing install**: `dsh plugin --profile web add dsh-taskswarm`
+> reports "Already up to date" and stays on the old version when the lockfile
+> version already satisfies the declared range. Pin the new version explicitly:
+> `dsh plugin --profile web add dsh-taskswarm@<new-version>` (or run
+> `pnpm update --latest` in the profile directory), then restart dsh web.
+
 ### 2. Scaffold example tasks
 
 ```

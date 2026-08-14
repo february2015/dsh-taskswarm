@@ -59,6 +59,19 @@ dsh plugin --profile web add taskswarm          # 装插件（重启 dsh web 生
 npx --package taskswarm taskswarm-dashboard --root <仓库路径>   # 独立 dashboard CLI
 ```
 
+### 升级已安装的插件
+
+`dsh plugin --profile web add taskswarm` **不会升级**已满足依赖范围的旧版本：
+lockfile 里的 `0.2.9` 满足声明范围 `^0.2.9`，pnpm 会报 "Already up to date" 并停留在旧版。
+要拉到范围内的更新版本，需**显式指定版本**：
+
+```bash
+dsh plugin --profile web add dsh-taskswarm@0.2.10   # 显式版本一定重新解析
+# 或在 profile 目录里：pnpm update --latest
+```
+
+然后重启 `dsh web` 生效。
+
 ## 版本规则
 
 - 语义化版本；0.x 阶段破坏性变更可走 minor。

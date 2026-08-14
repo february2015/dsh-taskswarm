@@ -39,6 +39,8 @@ dsh plugin --profile web add $(pwd)
 
 安装后**重启 dsh web**，插件即生效。
 
+> **升级已装的版本**：`dsh plugin --profile web add dsh-taskswarm` 对已满足依赖范围的旧版会报 "Already up to date" 不升级；要拉新版本需显式指定：`dsh plugin --profile web add dsh-taskswarm@<新版本>`（或在该 profile 目录 `pnpm update --latest`），然后重启 dsh web。
+
 ### 2. 初始化示例任务
 
 ```
