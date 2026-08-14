@@ -584,10 +584,14 @@ function renderSummary(batch) {
   const overallPct = batchTotal > 0 ? Math.round((batchChecked / batchTotal) * 100) : 0;
   $overallPct.textContent = `${overallPct}%`;
 
-  // Build segmented progress bar — each wave gets a proportional segment
+  // Build segmented progress bar — each wave gets a proportional segment.
+  // Segment width is by TASK COUNT (not checkbox count): a pending wave whose
+  // tasks have no STATUS.md yet would otherwise collapse to 0% width and the
+  // bar would show only the current wave (upstream TaskPlane behavior).
+  const totalTaskCount = waveStats.reduce((acc, s) => acc + s.taskIds.length, 0);
   let barHtml = "";
   for (const ws of waveStats) {
-    const segWidthPct = batchTotal > 0 ? (ws.total / batchTotal) * 100 : (100 / waveStats.length);
+    const segWidthPct = totalTaskCount > 0 ? (ws.taskIds.length / totalTaskCount) * 100 : (100 / waveStats.length);
     const fillPct = ws.total > 0 ? (ws.checked / ws.total) * 100 : 0;
     const checkboxDone = ws.checked === ws.total && ws.total > 0;
     const pastWave = ws.waveIdx < currentWaveIdx;
