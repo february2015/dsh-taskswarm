@@ -42,30 +42,30 @@ dsh plugin --profile web add $(pwd)
 ### 2. 初始化示例任务
 
 ```
-/taskswarm-init        # 生成两个示例任务包（EXAMPLE-001 / EXAMPLE-002）
+/tswarm-init        # 生成两个示例任务包（EXAMPLE-001 / EXAMPLE-002）
 ```
 
 ### 3. 预览波次计划（不执行）
 
 ```
-/taskswarm-plan all    # 展示任务按依赖排成的波次
+/tswarm-plan all    # 展示任务按依赖排成的波次
 ```
 
 ### 4. 启动批次
 
 ```
-/taskswarm all         # 并行执行所有任务；也可以指定任务：/taskswarm EXAMPLE-002
-/taskswarm-status      # 随时查看进度
+/tswarm all         # 并行执行所有任务；也可以指定任务：/tswarm EXAMPLE-002
+/tswarm-status      # 随时查看进度
 ```
 
 ### 5. 看 Dashboard
 
-启动批次（`/taskswarm`）会**自动启动 dashboard 并把链接打印在会话里**，波次执行期间
+启动批次（`/tswarm`）会**自动启动 dashboard 并把链接打印在会话里**，波次执行期间
 随时可看进度。手动控制仍然可用：
 
 ```bash
 # DSH 会话内（supervisor 命令）
-/taskswarm-dashboard
+/tswarm-dashboard
 
 # 独立 CLI —— 安装插件后 bin 即在 PATH 上：
 npx taskswarm-dashboard --root <仓库路径>
@@ -83,7 +83,7 @@ TaskSwarm 编排 **4 类角色**：
 
 | 角色             | 职责                                                  |
 | -------------- | --------------------------------------------------- |
-| **Supervisor** | 规划波次、调度 lane、处理事件、与你对话（你发起 `/taskswarm` 的会话即 supervisor） |
+| **Supervisor** | 规划波次、调度 lane、处理事件、与你对话（你发起 `/tswarm` 的会话即 supervisor） |
 | **Worker**     | 每个任务一个 DSH agent，在隔离的 lane worktree 里逐步推进任务包        |
 | **Reviewer**   | 独立 agent 评审 worker 产出，给出 PASS / REVISE              |
 | **Merger**     | lane 完成后自动把产物合并进 `taskswarm/orch` 集成分支                   |
@@ -108,16 +108,16 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 
 | 命令                             | 作用                              |
 | ------------------------------ | ------------------------------- |
-| `/taskswarm [scope]`                | 启动批次（scope: `all` / 任务 ID / 路径） |
-| `/taskswarm-plan [scope]`           | 预览波次计划与依赖图（不执行）                 |
-| `/taskswarm-status`                 | 查看当前批次 / lane 进度                |
-| `/taskswarm-pause` / `/taskswarm-resume` | 当前波次结束后暂停 / 恢复                  |
-| `/taskswarm-abort`                  | 当前波次结束后中止（并终止运行中 lane）          |
-| `/taskswarm-deps [scope]`           | 查看依赖图                           |
-| `/taskswarm-sessions`               | 列出活跃 lane 及其 worktree           |
-| `/taskswarm-integrate`              | 把 `taskswarm/orch` 合并进当前工作分支         |
-| `/taskswarm-dashboard`              | 启动 Web Dashboard                |
-| `/taskswarm-init [ID]`              | 生成示例任务包                         |
+| `/tswarm [scope]`                | 启动批次（scope: `all` / 任务 ID / 路径） |
+| `/tswarm-plan [scope]`           | 预览波次计划与依赖图（不执行）                 |
+| `/tswarm-status`                 | 查看当前批次 / lane 进度                |
+| `/tswarm-pause` / `/tswarm-resume` | 当前波次结束后暂停 / 恢复                  |
+| `/tswarm-abort`                  | 当前波次结束后中止（并终止运行中 lane）          |
+| `/tswarm-deps [scope]`           | 查看依赖图                           |
+| `/tswarm-sessions`               | 列出活跃 lane 及其 worktree           |
+| `/tswarm-integrate`              | 把 `taskswarm/orch` 合并进当前工作分支         |
+| `/tswarm-dashboard`              | 启动 Web Dashboard                |
+| `/tswarm-init [ID]`              | 生成示例任务包                         |
 
 > 兼容别名：`/orch`、`/orch-status` 等 `/orch-*` 命令等价。
 

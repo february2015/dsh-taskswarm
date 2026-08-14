@@ -140,7 +140,7 @@
 
 #### Repro steps
 
-1. `cd ~/myProject/taskswarm && npm run build`
+1. `cd ~/myProject/tswarm && npm run build`
 2. In a dsh web session: `/tswarm-init` → `/orch all`
 3. Watch the sidebar: `session-<uuid>` sessions appear under "Ungrouped"
    (count = active workers + reviewer)

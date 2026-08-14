@@ -12,7 +12,7 @@ test('orchestrator plugin registers the /orch-family commands', () => {
   apply(ctx, {})
   const expected = [
     'orch', 'orch-plan', 'orch-status', 'orch-pause', 'orch-resume',
-    'orch-abort', 'orch-deps', 'orch-sessions', 'orch-integrate', 'taskswarm-init',
+    'orch-abort', 'orch-deps', 'orch-sessions', 'orch-integrate', 'tswarm-init',
   ]
   for (const name of expected) {
     assert.ok(registered.includes(name), `command /${name} registered`)

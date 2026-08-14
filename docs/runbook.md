@@ -9,7 +9,7 @@
 > - **Exception handling** (Part B): leftover cleanup, error recovery, work salvage
 > - **Reference** (Part C): action classification, wave dependency semantics, known-issues links
 >
-> All commands use the repo root as cwd (e.g. `~/myProject/taskswarm`). Action classification (diagnostic /
+> All commands use the repo root as cwd (e.g. `~/myProject/tswarm`). Action classification (diagnostic /
 > tier0_known / destructive) matches the supervisor autonomy rules, see §9.
 
 ---
@@ -96,8 +96,8 @@ engine's in-memory state is cleared, leaving only the disk state — so all reco
 ### 3.1 Installing into DSH
 
 ```bash
-cd ~/myProject/taskswarm && npm run build
-dsh plugin --profile web add ~/myProject/taskswarm   # append the taskswarm bundle to the web profile
+cd ~/myProject/tswarm && npm run build
+dsh plugin --profile web add ~/myProject/tswarm   # append the taskswarm bundle to the web profile
 # after restarting dsh web, in-session: /tswarm-init → /tswarm all → /tswarm-status
 ```
 
@@ -403,7 +403,7 @@ Key point: crash recovery = **salvage first, then clean up, then rerun** — don
 
 "Salvage" = retrieving the **work already produced** from failed lanes / crashed processes and landing it.
 Project precedent: WEB-006 (cli-integration) salvaged the dashboard server during the batch;
-`/taskswarm-dashboard` in `src/orchestrator/index.ts` is "ported from WEB-006's salvage implementation".
+`/tswarm-dashboard` in `src/orchestrator/index.ts` is "ported from WEB-006's salvage implementation".
 
 ### 8.1 Where the Salvageable Artifacts Are
 

@@ -36,7 +36,7 @@ import { scanTasks, formatWavePlan } from '../core/discover.ts'
 import { scaffoldTask } from '../core/task.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
 
-export const name = 'taskswarm-orchestrator'
+export const name = 'tswarm-orchestrator'
 export const inject = ['commands', 'agents', 'agentDefaultModel', 'sessions']
 
 export interface Config {
@@ -130,7 +130,7 @@ function agentCwdOf(agent: AgentLike | undefined, ctx: Context): string | undefi
   return undefined
 }
 
-// ── /taskswarm-dashboard（移植自 WEB-006 的抢救实现）────────────────────────────
+// ── /tswarm-dashboard（移植自 WEB-006 的抢救实现）────────────────────────────
 // dashboard 进程统一由 DashboardManager 管理（与 supervisor 的 tswarm_dashboard
 // 工具共享注册表），启动批次时也会自动拉起并打印链接。
 
@@ -205,7 +205,7 @@ export function apply(ctx: Context, config: Config): void {
     if (config.host === 'headless') {
       host = new HeadlessWorkerHost({
         dshBin: config.dshBin ?? 'dsh',
-        profile: config.workerProfile ?? 'taskswarm-worker',
+        profile: config.workerProfile ?? 'tswarm-worker',
       })
     } else {
       host = new InProcessWorkerHost({
@@ -327,7 +327,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-plan', 'orch-plan'], {
+  registerCommand(['tswarm-plan', 'orch-plan'], {
     description: 'preview the TaskSwarm wave plan and dependency graph without executing',
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
@@ -339,7 +339,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-status', 'orch-status'], {
+  registerCommand(['tswarm-status', 'orch-status'], {
     description: 'show the current TaskSwarm batch and lane progress',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state: BatchState | null = ref.engine.status()
@@ -347,25 +347,25 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-pause', 'orch-pause'], {
+  registerCommand(['tswarm-pause', 'orch-pause'], {
     description: 'pause the TaskSwarm batch after the current wave',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.pause() ? ok('Batch paused after the current wave.') : err('No running batch to pause.')),
   })
 
-  registerCommand(['taskswarm-resume', 'orch-resume'], {
+  registerCommand(['tswarm-resume', 'orch-resume'], {
     description: 'resume a paused TaskSwarm batch',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.resume() ? ok('Batch resumed.') : err('No paused batch to resume.')),
   })
 
-  registerCommand(['taskswarm-abort', 'orch-abort'], {
+  registerCommand(['tswarm-abort', 'orch-abort'], {
     description: 'abort the TaskSwarm batch after the current wave (kills running lanes)',
     handler: (invocation) => withEngine(invocation, (ref) =>
       ref.engine.abort() ? ok('Batch abort requested.') : err('No running batch to abort.')),
   })
 
-  registerCommand(['taskswarm-deps', 'orch-deps'], {
+  registerCommand(['tswarm-deps', 'orch-deps'], {
     description: 'show the TaskSwarm task dependency graph',
     input: { hint: '[all|<task-id>|<path>]' },
     handler: (invocation) => withEngine(invocation, (ref) => {
@@ -375,7 +375,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-sessions', 'orch-sessions'], {
+  registerCommand(['tswarm-sessions', 'orch-sessions'], {
     description: 'list active TaskSwarm lanes and their worktrees',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state = ref.engine.status()
@@ -386,7 +386,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-integrate', 'orch-integrate'], {
+  registerCommand(['tswarm-integrate', 'orch-integrate'], {
     description: 'merge the taskswarm/orch integration branch into the working branch',
     handler: (invocation) => withEngine(invocation, (ref) => {
       const result = ref.engine.integrate()
@@ -394,7 +394,7 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
-  registerCommand(['taskswarm-dashboard', 'orch-dashboard'], {
+  registerCommand(['tswarm-dashboard', 'orch-dashboard'], {
     description: 'start the TaskSwarm web dashboard for this repo (independent local server)',
     input: { hint: '[--port <number>]' },
     handler: (invocation) => withEngine(invocation, async (ref) => {
@@ -411,7 +411,7 @@ export function apply(ctx: Context, config: Config): void {
   })
 
   ctx.commands.register({
-    name: 'taskswarm-init',
+    name: 'tswarm-init',
     description: 'scaffold two example TaskSwarm tasks (EXAMPLE-001 hello-world, EXAMPLE-002 parallel-smoke)',
     input: { hint: '[ID]' },
     handler: (invocation) => withEngine(invocation, (ref) => {

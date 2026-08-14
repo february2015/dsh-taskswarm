@@ -9,7 +9,7 @@
 > - **异常处置**（Part B）：清理残留、错误恢复、工作抢救
 > - **参考**（Part C）：动作分类、波次依赖语义、known-issues 关联
 > 
-> 所有命令以仓库根为 cwd（如 `~/myProject/taskswarm`）。动作分类（diagnostic /
+> 所有命令以仓库根为 cwd（如 `~/myProject/tswarm`）。动作分类（diagnostic /
 > tier0_known / destructive）与 supervisor 自主度规则一致，见 §9。
 
 ---
@@ -94,8 +94,8 @@ TaskSwarm 的**唯一权威状态**是磁盘上的 `.taskswarm/`，不是内存�
 ### 3.1 安装到 DSH
 
 ```bash
-cd ~/myProject/taskswarm && npm run build
-dsh plugin --profile web add ~/myProject/taskswarm   # 追加 taskswarm bundle 到 web profile
+cd ~/myProject/tswarm && npm run build
+dsh plugin --profile web add ~/myProject/tswarm   # 追加 taskswarm bundle 到 web profile
 # 重启 dsh web 后，会话里 /tswarm-init → /tswarm all → /tswarm-status
 ```
 
@@ -441,7 +441,7 @@ plan 继续。代码成果在手动收尾时已保住（在主干），重启无
 
 「抢救」= 从失败的 lane / 崩溃的进程里，把**已经做出来的活**捞回来并落地。
 项目先例：WEB-006（cli-integration）在批次里抢救出 dashboard server，
-`src/orchestrator/index.ts` 的 `/taskswarm-dashboard` 即"移植自 WEB-006 的抢救实现"。
+`src/orchestrator/index.ts` 的 `/tswarm-dashboard` 即"移植自 WEB-006 的抢救实现"。
 
 ### 8.1 抢救对象在哪
 

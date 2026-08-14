@@ -146,7 +146,7 @@
 
 #### 复现步骤
 
-1. `cd ~/myProject/taskswarm && npm run build`
+1. `cd ~/myProject/tswarm && npm run build`
 2. dsh web 会话里：`/tswarm-init` → `/orch all`
 3. 观察侧边栏：「未分组」下出现 `session-<uuid>` 会话（数量 = 活跃 worker + reviewer）
 

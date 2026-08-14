@@ -2,7 +2,7 @@
  * TaskSwarm Dashboard lifecycle — one shared registry of dashboard server
  * processes, keyed by repoRoot.
  *
- * The supervisor tool (`tswarm_dashboard`), the `/taskswarm-dashboard` command and
+ * The supervisor tool (`tswarm_dashboard`), the `/tswarm-dashboard` command and
  * the auto-start-on-batch logic all go through this manager, so "one
  * dashboard per repo" holds no matter which entry point ran first. The server
  * itself (`dashboard/server.mjs`) auto-avoids occupied ports (bumps 8100+

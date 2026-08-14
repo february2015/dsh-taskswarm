@@ -44,30 +44,30 @@ dsh plugin --profile web add $(pwd)
 ### 2. Scaffold example tasks
 
 ```
-/taskswarm-init        # creates two example task packets (EXAMPLE-001 / EXAMPLE-002)
+/tswarm-init        # creates two example task packets (EXAMPLE-001 / EXAMPLE-002)
 ```
 
 ### 3. Preview the wave plan (no execution)
 
 ```
-/taskswarm-plan all    # shows tasks grouped into waves by dependency
+/tswarm-plan all    # shows tasks grouped into waves by dependency
 ```
 
 ### 4. Start a batch
 
 ```
-/taskswarm all         # run all tasks in parallel; or target one: /taskswarm EXAMPLE-002
-/taskswarm-status      # watch progress anytime
+/tswarm all         # run all tasks in parallel; or target one: /tswarm EXAMPLE-002
+/tswarm-status      # watch progress anytime
 ```
 
 ### 5. Open the Dashboard
 
-Starting a batch (`/taskswarm`) **auto-starts the dashboard and prints its link** in the
+Starting a batch (`/tswarm`) **auto-starts the dashboard and prints its link** in the
 session, so you can watch progress while waves run. Manual control is still available:
 
 ```bash
 # from a DSH session (supervisor command)
-/taskswarm-dashboard
+/tswarm-dashboard
 
 # or standalone CLI — after installing the plugin, the bin is on PATH:
 npx taskswarm-dashboard --root <repo>
@@ -86,10 +86,10 @@ Four roles are orchestrated:
 
 | Role           | Responsibility                                                                              |
 | -------------- | ------------------------------------------------------------------------------------------- |
-| **Supervisor** | Plans waves, schedules lanes, handles events, talks to you (the session that ran `/taskswarm`)   |
+| **Supervisor** | Plans waves, schedules lanes, handles events, talks to you (the session that ran `/tswarm`) |
 | **Worker**     | One DSH agent per task, advancing its task packet step by step in an isolated lane worktree |
 | **Reviewer**   | Independent agent reviewing worker output, emitting PASS / REVISE                           |
-| **Merger**     | Merges finished lane output into the `taskswarm/orch` integration branch                         |
+| **Merger**     | Merges finished lane output into the `taskswarm/orch` integration branch                    |
 
 **Git model:**
 
@@ -109,18 +109,18 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 
 ## Command Reference
 
-| Command                        | Action                                                |
-| ------------------------------ | ----------------------------------------------------- |
-| `/taskswarm [scope]`                | Start a batch (scope: `all` / task id / path)         |
-| `/taskswarm-plan [scope]`           | Preview wave plan and dependency graph (no execution) |
-| `/taskswarm-status`                 | Show current batch / lane progress                    |
-| `/taskswarm-pause` / `/taskswarm-resume` | Pause after the current wave / resume                 |
-| `/taskswarm-abort`                  | Abort after the current wave (kills running lanes)    |
-| `/taskswarm-deps [scope]`           | Show the dependency graph                             |
-| `/taskswarm-sessions`               | List active lanes and their worktrees                 |
-| `/taskswarm-integrate`              | Merge `taskswarm/orch` into the current working branch     |
-| `/taskswarm-dashboard`              | Start the Web Dashboard                               |
-| `/taskswarm-init [ID]`              | Scaffold example task packets                         |
+| Command                            | Action                                                 |
+| ---------------------------------- | ------------------------------------------------------ |
+| `/tswarm [scope]`                  | Start a batch (scope: `all` / task id / path)          |
+| `/tswarm-plan [scope]`             | Preview wave plan and dependency graph (no execution)  |
+| `/tswarm-status`                   | Show current batch / lane progress                     |
+| `/tswarm-pause` / `/tswarm-resume` | Pause after the current wave / resume                  |
+| `/tswarm-abort`                    | Abort after the current wave (kills running lanes)     |
+| `/tswarm-deps [scope]`             | Show the dependency graph                              |
+| `/tswarm-sessions`                 | List active lanes and their worktrees                  |
+| `/tswarm-integrate`                | Merge `taskswarm/orch` into the current working branch |
+| `/tswarm-dashboard`                | Start the Web Dashboard                                |
+| `/tswarm-init [ID]`                | Scaffold example task packets                          |
 
 > Compatible aliases: `/orch`, `/orch-status` and other `/orch-*` commands are equivalent.
 
