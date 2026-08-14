@@ -64,8 +64,12 @@ export function createLaneWorktree(repoRoot: string, paths: WorktreePaths, taskI
     if (!removed.ok) runGit(['worktree', 'prune'], repoRoot)
   }
   const hasBranch = runGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoRoot).ok
+  // git worktree add 语法：`add <path> [<commit-ish>]`——path 在前。
+  // 已存在分支时 `worktree add <dir> <branch>`（附着）；新分支 `worktree add -b <branch> <dir>`。
+  // （2026-08-14 修正：原 `add <branch> <dir>` 参数顺序颠倒，git 把 branch 当 path → 无效引用，
+  //   导致"已存在分支"的 lane 重跑 always "could not create lane worktree"，如 JM-337。）
   const result = hasBranch
-    ? runGit(['worktree', 'add', branch, dir], repoRoot)
+    ? runGit(['worktree', 'add', dir, branch], repoRoot)
     : runGit(['worktree', 'add', '-b', branch, dir], repoRoot)
   if (!result.ok) return null
   return { dir, branch }
