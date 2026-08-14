@@ -76,7 +76,7 @@ export const Config: z<Config> = z.object({
   supervisorCheckIntervalMs: z.number().default(60_000),
   supervisorStalledMs: z.number().default(240_000),
   locale: z.union([z.const('auto'), z.const('zh-CN'), z.const('en')]).default('auto'),
-  laneTimeoutMinutes: z.number().default(90),
+  laneTimeoutMinutes: z.number().default(180),
 })
 
 interface EngineRef {
