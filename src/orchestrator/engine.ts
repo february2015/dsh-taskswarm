@@ -233,6 +233,11 @@ export class BujuEngine {
   private async runLane(ctx: RunContext, state: BatchState, task: WavePlan['tasks'][number]): Promise<LaneState> {
     const { config, paths, batchId } = ctx
     const existing = state.lanes.find((l) => l.taskId === task.id)
+    // 方案 A（KI-007）：续跑/恢复时跳过已完成 lane（磁盘状态为准，防止重跑已 merged/failed 任务）。
+    if (existing && (existing.phase === 'merged' || existing.phase === 'failed')) {
+      laneLog(existing, `skipped (already ${existing.phase})`)
+      return existing
+    }
     const lane: LaneState = {
       lane: existing?.lane ?? state.lanes.length + 1,
       taskId: task.id,
@@ -373,13 +378,37 @@ export class BujuEngine {
   /** Resume a paused batch. */
   resume(): boolean {
     const ctx = this.activeContext()
-    if (!ctx) return false
-    ctx.paused = false
-    const state = readBatchState(this.config.stateRoot, ctx.batchId)
-    if (state) {
-      state.phase = 'running'
-      writeBatchState(state)
+    if (ctx) {
+      ctx.paused = false
+      const state = readBatchState(this.config.stateRoot, ctx.batchId)
+      if (state) {
+        state.phase = 'running'
+        writeBatchState(state)
+      }
+      return true
     }
+    // 引擎重启后 active 为空：从磁盘恢复未完成批次续跑（方案 A，KI-007）。
+    // 已 merged/failed 的 lane 由 runLane 跳过；剩余 pending 任务按新 wave plan 继续。
+    return this.recoverPendingBatch()
+  }
+
+  /**
+   * 方案 A（KI-007）：引擎重启/崩溃后，把磁盘上 phase ∈ running/planning/paused 的
+   * 批次重新挂回执行（跳过已完成 lane）。这样失联/重启不再需要手动开新批次重排剩余任务。
+   */
+  private recoverPendingBatch(): boolean {
+    const state = latestBatch(this.config.stateRoot)
+    if (!state) return false
+    if (state.phase !== 'running' && state.phase !== 'planning' && state.phase !== 'paused') return false
+    if (this.active.has(state.id)) return false
+    // select() 默认排除已 done 任务（.DONE 标记）→ wave plan 只含剩余任务。
+    const selected = this.select(state.scope)
+    if (selected.length === 0) return false
+    const waves = buildWaves(selected.map((t) => t.task))
+    const paths = worktreePaths(this.config.repoRoot, this.config.stateRoot)
+    const ctx: RunContext = { batchId: state.id, config: this.config, paths, paused: false, aborted: false }
+    this.active.set(state.id, ctx)
+    void this.execute(ctx, waves, state).finally(() => this.active.delete(state.id))
     return true
   }
 

@@ -26,20 +26,22 @@
   `Promise.all(wave.map(runLane))` 并行；`runLane()` 第 270 行 `await config.host.spawn(spec)`
   **无超时**——worker 失联/事件丢失时该 await 永不返回 → execute 卡死在当前 wave →
   后续 wave 永不启动（不是"wave 判定不读盘"，而是 execute 的 await 挂起）。
-- **修复说明（方案 B 看门狗超时）:**
-  - `engine.ts` 新增 `runLaneWorker()`：对 `host.spawn()` 包 `Promise.race` 超时
-    （`laneTimeoutMinutes`，默认 90 分钟，可配置；0 = 禁用）。超时先 `host.abort(lane)`
-    杀掉僵尸 worker，再返回 `{ exitCode: 1, error: 'lane timeout...' }` → runLane 正常收尾
-    （phase=failed，worktree/分支保留供排查）→ execute 继续下一 wave。**不再需要重启引擎。**
-  - `index.ts` `Config` 新增 `laneTimeoutMinutes`（默认 90）并传入 `EngineConfig`。
-  - **方案 A（reconcile）经分析由 B 覆盖**：execute 顺序执行 wave、无"判定"步骤，卡点是
-    spawn await 无超时；超时解决后手动标记的 lane 会在下一 wave 推进时被天然跳过
-    （`select()` 默认排除已 done 任务，`.DONE` 标记即续跑依据）。不再单独实现 A。
+- **修复说明（方案 B 看门狗超时 + 方案 A 磁盘恢复）:**
+  - **方案 B（防卡死）:** `engine.ts` 新增 `runLaneWorker()`：对 `host.spawn()` 包
+    `Promise.race` 超时（`laneTimeoutMinutes`，默认 90 分钟，可配置；0 = 禁用）。超时先
+    `host.abort(lane)` 杀掉僵尸 worker，再返回 `{ exitCode: 1, error: 'lane timeout...' }`
+    → runLane 正常收尾（phase=failed，worktree/分支保留供排查）→ execute 继续下一 wave。
+    **不再需要重启引擎。**
+  - **方案 A（重启/崩溃后可续跑）:** ① `runLane()` 开头跳过磁盘上已 `merged/failed` 的
+    lane（续跑不重跑已完成任务）；② `resume()` 增强——引擎重启后 `active` 为空时，从磁盘
+    恢复 phase ∈ running/planning/paused 的批次重新挂回执行（`recoverPendingBatch()`：
+    `select()` 默认排除已 done 任务 → wave plan 只含剩余任务，pending lane 继续）。
+    效果：重启后 supervisor 直接 `resume` 即可续跑旧批次，无需手动开新批次重排。
   - **方案 C（lane 级状态修正工具）未做**（可选）：`buju_supervisor_control` 的 `abort`
     工具已加**批次级防误伤提示**（scope 非空时明确"abort 是批次级、scope 不生效"并拒绝，
-    防止误 abort 整批），单 lane 释放走 runbook §7.6 手动收尾 + 重启（有 B 后无需重启）。
+    防止误 abort 整批），单 lane 释放走 runbook §7.6 手动收尾（有 B 后无需重启）。
+- **配置：** `index.ts` `Config` / `.buju/config.json` 设 `laneTimeoutMinutes`（分钟，默认 90）。
 - **临时 workaround（修复前）:** runbook §7.6（手动收尾保住代码 → 标记 merged → 重启引擎）。
-- **配置：** `.buju/config.json` 或插件 Config 设 `laneTimeoutMinutes`（分钟）。
 
 ---
 

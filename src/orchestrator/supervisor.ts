@@ -447,7 +447,8 @@ export function registerSupervisor(
         }
         case 'resume': {
           const ok = engine.resume()
-          return { ok, text: ok ? 'Batch resumed.' : 'No paused batch to resume.' }
+          // 引擎重启后 resume 会从磁盘恢复未完成批次续跑（方案 A，KI-007）。
+          return { ok, text: ok ? 'Batch resumed.' : 'No paused batch or recoverable batch to resume.' }
         }
         case 'pause': {
           const ok = engine.pause()
