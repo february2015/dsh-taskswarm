@@ -1,7 +1,7 @@
 # Release Guide (发布手册)
 
 > For **maintainers** — how to publish taskswarm to the npm registry so others
-> can `dsh plugin add taskswarm` or `npx taskswarm-dashboard`. Bilingual standard:
+> can `dsh plugin add dsh-taskswarm` or `npx taskswarm-dashboard`. Bilingual standard:
 > 中文版见 [release.zh-CN.md](release.zh-CN.md).
 >
 > User-facing install instructions (npm / GitHub / local) live in the README;
@@ -11,7 +11,7 @@
 
 | Channel | How users install | When |
 |---|---|---|
-| **npm** (primary) | `dsh plugin add taskswarm` / `npx --package taskswarm taskswarm-dashboard` | every release |
+| **npm** (primary) | `dsh plugin add dsh-taskswarm` / `npx --package dsh-taskswarm taskswarm-dashboard` | every release |
 | GitHub | `dsh plugin add https://github.com/february2015/dsh-taskswarm.git` | keep in sync (push master) |
 | local / offline | clone or zip + `npm install && npm run build && dsh plugin add <dir>` | development |
 
@@ -22,7 +22,7 @@
   `E403 ... Two-factor authentication or granular access token with bypass 2fa
   enabled is required` when the account has 2FA enabled (it does, by default):
   - https://www.npmjs.com/settings/<user>/tokens → Generate New Token → **Granular Access Token**
-  - Packages and scopes: `taskswarm`; Permissions: **Read and write**
+  - Packages and scopes: `dsh-taskswarm`; Permissions: **Read and write**
   - **Must check the 2FA bypass option** ("bypass" for publish) — otherwise publishing still fails.
 - Store the token (the published steps below assume it's in `~/.npmrc`):
 
@@ -49,8 +49,8 @@ npm pack --dry-run
 npm publish
 
 # 5. Verify
-npm view taskswarm version        # → 0.1.1
-npm view taskswarm bin            # → { 'taskswarm-dashboard': 'dashboard/server.mjs' }
+npm view dsh-taskswarm version        # → 0.1.1
+npm view dsh-taskswarm bin            # → { 'taskswarm-dashboard': 'dashboard/server.mjs' }
 
 # 6. Only after everything above passes, push to GitHub (ordering rule below)
 git push origin master
@@ -68,13 +68,13 @@ git push origin master
 ## Verifying from the user side
 
 ```bash
-dsh plugin --profile web add taskswarm          # install as plugin (restart dsh web)
-npx --package taskswarm taskswarm-dashboard --root <repo>   # standalone dashboard CLI
+dsh plugin --profile web add dsh-taskswarm          # install as plugin (restart dsh web)
+npx --package dsh-taskswarm taskswarm-dashboard --root <repo>   # standalone dashboard CLI
 ```
 
 ### Upgrading an existing install
 
-`dsh plugin --profile web add taskswarm` **does not bump** a dependency whose
+`dsh plugin --profile web add dsh-taskswarm` **does not bump** a dependency whose
 lockfile version already satisfies the declared range (`^0.2.9` is satisfied by
 `0.2.9`, so pnpm reports "Already up to date" and stays on the old version).
 To pull a newer version within the range, pin it explicitly:
@@ -95,7 +95,7 @@ Then restart `dsh web` for the new version to take effect.
 
 ## Security notes
 
-- Use the least-privilege token: scoped to `taskswarm` only, Read and write, bypass 2FA.
+- Use the least-privilege token: scoped to `dsh-taskswarm` only, Read and write, bypass 2FA.
 - The token is stored in `~/.npmrc` — treat it like a password.
 - If a token leaks or you stop using it: revoke it at
   https://www.npmjs.com/settings/<user>/tokens and remove it locally with
@@ -108,5 +108,5 @@ Then restart `dsh web` for the new version to take effect.
 - [ ] version bumped in `package.json`
 - [ ] `npm pack --dry-run` shows the expected files (lib/dashboard/docs/templates/cordis.patch.yml/README\*)
 - [ ] `npm publish` succeeds
-- [ ] `npm view taskswarm` confirms the new version + bin
+- [ ] `npm view dsh-taskswarm` confirms the new version + bin
 - [ ] **(only after all of the above)** `git push origin master` to GitHub
