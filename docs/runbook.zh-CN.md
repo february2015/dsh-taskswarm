@@ -47,6 +47,11 @@ TaskSwarm 的**唯一权威状态**是磁盘上的 `.taskswarm/`，不是内存�
 | `taskswarm/orch`     | 集成分支，所有 lane 产物汇总于此            | 常驻，引擎自动创建，**勿删**               |
 | `taskswarm/<taskId>` | 单个 lane 的工作分支（检查点 commit 都在上面） | merge 成功后被删；失败/abort/崩溃时**残留** |
 
+> **lane 基线机制**：新 lane 从 `taskswarm/orch` HEAD 建分支（`worktree add -b <branch> <dir> taskswarm/orch`）——
+> 直接继承**此前所有已合并任务**的产物，不重造共享代码；续跑 lane 附着旧分支后引擎自动
+> `git merge taskswarm/orch` 同步最新合并产物（冲突时 abort，由 worker 自行 merge）。
+> worker 任务书也明确说明基线含 orch 产物，并提示需要更新时可自行 merge。
+
 **关键机制**（代码依据 `src/core/worktree.ts`、`src/orchestrator/engine.ts`）：
 
 - **检查点纪律**：worker 在步骤边界和退出时执行 checkpoint commit 到 `taskswarm/<taskId>`。
@@ -349,7 +354,8 @@ rm .taskswarm/batches/<batchId>.json
 /tswarm <taskId>       # 或 tswarm_supervisor_control start scope=<taskId>
 ```
 
-因为 `taskswarm/<taskId>` 分支还在，新 worktree 会**附着旧分支**——从旧检查点续跑而非从零。
+因为 `taskswarm/<taskId>` 分支还在，新 worktree 会**附着旧分支**——从旧检查点续跑而非从零
+（引擎会先自动 `git merge taskswarm/orch` 把最新合并产物并入 lane，冲突时 abort 由 worker 自行处理）。
 
 > ⚠️ **同波 fmt 任务冲突（2026-08-14 实测）**：同波内若有 `cargo fmt --all` 类任务（全仓重排 .rs，一次可达 69 文件），与同波改 .rs 的其他任务**必然 merge 冲突**（如 external/lib.rs、main/system.rs、biz-core/scope.rs）。处置：`_orch` worktree 里对冲突文件 `git checkout --theirs -- <file>` 取 worker 功能版本 → `git add` → 完成合并 → **波末统一跑 `cargo fmt --all` 提交归一**（否则 W2 起 lane 从含混合格式的基线出发）。预防：fmt 类任务单波执行，或 File Scope 限定为 `cargo fmt --check` 实际报错的文件清单。
 

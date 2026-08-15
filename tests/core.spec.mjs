@@ -7,6 +7,8 @@ import { sanitizeNameComponent, resolveRepoSlug } from '../lib/core/naming.js'
 import { parsePrompt, ensureStatusFile, advanceStep, markTaskDone, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
 import { scanTasks, scanTaskFailures, buildWaves } from '../lib/core/discover.js'
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
+import { runGit } from '../lib/core/git.js'
+import { ensureOrchWorktree, createLaneWorktree, worktreePaths } from '../lib/core/worktree.js'
 
 function tmp() {
   return mkdtempSync(join(tmpdir(), 'taskswarm-core-'))
@@ -164,5 +166,70 @@ test('checkPacketQuality flags missing steps / criteria / file scope', () => {
   const warnings = checkPacketQuality(packet)
   assert.ok(warnings.some((w) => w.includes('Step')))
   assert.ok(warnings.some((w) => w.includes('File Scope')))
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('lane worktrees are based on taskswarm/orch HEAD, not the working branch', () => {
+  const root = tmp()
+  runGit(['init', '-q'], root)
+  runGit(['config', 'user.email', 'test@example.com'], root)
+  runGit(['config', 'user.name', 'test'], root)
+  writeFileSync(join(root, 'master.txt'), 'master only\n')
+  runGit(['add', '-A'], root)
+  runGit(['commit', '-m', 'master base'], root)
+
+  const paths = worktreePaths(root, join(root, '.taskswarm'))
+  assert.equal(ensureOrchWorktree(root, paths).ok, true)
+  // Simulate a merged lane: commit T-1's output onto orch only (not on master).
+  writeFileSync(join(paths.orchWorktree, 't1-output.txt'), 'merged by T-1\n')
+  runGit(['add', '-A'], paths.orchWorktree)
+  runGit(['commit', '-m', 'T-1 merged'], paths.orchWorktree)
+
+  const lane = createLaneWorktree(root, paths, 'T-2')
+  assert.ok(lane, 'lane worktree should be created')
+  // The lane must inherit the orch-only file (baseline = orch HEAD).
+  assert.equal(existsSync(join(lane.dir, 't1-output.txt')), true, 'lane must contain orch-merged output')
+  assert.equal(existsSync(join(lane.dir, 'master.txt')), true)
+  const head = runGit(['log', '--oneline', '-1'], lane.dir)
+  assert.match(head.stdout, /T-1 merged/)
+
+  runGit(['worktree', 'remove', '--force', lane.dir], root)
+  runGit(['worktree', 'remove', '--force', paths.orchWorktree], root)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('retried lanes attach the old branch, keep checkpoints, and merge newer orch work', () => {
+  const root = tmp()
+  runGit(['init', '-q'], root)
+  runGit(['config', 'user.email', 'test@example.com'], root)
+  runGit(['config', 'user.name', 'test'], root)
+  writeFileSync(join(root, 'base.txt'), 'base\n')
+  runGit(['add', '-A'], root)
+  runGit(['commit', '-m', 'base'], root)
+
+  const paths = worktreePaths(root, join(root, '.taskswarm'))
+  assert.equal(ensureOrchWorktree(root, paths).ok, true)
+
+  // First run: lane based on orch v1, worker checkpoints some work.
+  const lane1 = createLaneWorktree(root, paths, 'T-3')
+  assert.ok(lane1)
+  writeFileSync(join(lane1.dir, 'checkpoint.txt'), 'old checkpoint\n')
+  runGit(['add', '-A'], lane1.dir)
+  runGit(['commit', '-m', 'checkpoint 1'], lane1.dir)
+  runGit(['worktree', 'remove', '--force', lane1.dir], root) // engine cleans the worktree, branch kept
+
+  // orch advances (another task merged).
+  writeFileSync(join(paths.orchWorktree, 't2-output.txt'), 'merged by T-2\n')
+  runGit(['add', '-A'], paths.orchWorktree)
+  runGit(['commit', '-m', 'T-2 merged'], paths.orchWorktree)
+
+  // Retry: recreate the lane → attaches existing branch + merges newer orch.
+  const lane2 = createLaneWorktree(root, paths, 'T-3')
+  assert.ok(lane2)
+  assert.equal(existsSync(join(lane2.dir, 'checkpoint.txt')), true, 'old checkpoint preserved')
+  assert.equal(existsSync(join(lane2.dir, 't2-output.txt')), true, 'newer orch work merged in')
+
+  runGit(['worktree', 'remove', '--force', lane2.dir], root)
+  runGit(['worktree', 'remove', '--force', paths.orchWorktree], root)
   rmSync(root, { recursive: true, force: true })
 })

@@ -6,7 +6,9 @@
  * Model:
  *   - `taskswarm/orch`  — dedicated integration branch (created once, never checked
  *     out in the main working tree).
- *   - one lane worktree per task: `git worktree add -b taskswarm/<taskId> <laneDir>`
+ *   - one lane worktree per task: `git worktree add -b taskswarm/<taskId> <laneDir> taskswarm/orch`
+ *     (lane baselines on the orch HEAD — it inherits every previously merged task's
+ *     output, instead of starting from the working branch and re-inventing shared code)
  *   - worker checkpoints: `git add -A && git commit -m "checkpoint: <msg>"`
  *   - merge-back: merge the lane branch into `taskswarm/orch` inside the orch
  *     worktree, then remove the lane worktree and delete the lane branch.
@@ -64,14 +66,27 @@ export function createLaneWorktree(repoRoot: string, paths: WorktreePaths, taskI
     if (!removed.ok) runGit(['worktree', 'prune'], repoRoot)
   }
   const hasBranch = runGit(['rev-parse', '--verify', `refs/heads/${branch}`], repoRoot).ok
+  const hasOrch = runGit(['rev-parse', '--verify', `refs/heads/${ORCH_BRANCH}`], repoRoot).ok
   // git worktree add 语法：`add <path> [<commit-ish>]`——path 在前。
-  // 已存在分支时 `worktree add <dir> <branch>`（附着）；新分支 `worktree add -b <branch> <dir>`。
+  // 新分支：`worktree add -b <branch> <dir> [<commit-ish>]`。
+  // 已存在分支：`worktree add <dir> <branch>`（附着）。
   // （2026-08-14 修正：原 `add <branch> <dir>` 参数顺序颠倒，git 把 branch 当 path → 无效引用，
   //   导致"已存在分支"的 lane 重跑 always "could not create lane worktree"，如 JM-337。）
+  // （2026-08-15 修正：新 lane 显式以 taskswarm/orch HEAD 为基线——此前从工作分支出发，
+  //   lane 看不到已合并任务的产物，全靠 worker 自觉 `git merge taskswarm/orch` 补基线；
+  //   若 worker 未意识到依赖即产出残缺/重复实现，merge 回 orch 时互相冲突。）
   const result = hasBranch
     ? runGit(['worktree', 'add', dir, branch], repoRoot)
-    : runGit(['worktree', 'add', '-b', branch, dir], repoRoot)
+    : hasOrch
+      ? runGit(['worktree', 'add', '-b', branch, dir, ORCH_BRANCH], repoRoot)
+      : runGit(['worktree', 'add', '-b', branch, dir], repoRoot)
   if (!result.ok) return null
+  // 续跑（附着既有分支）：把 orch 最新合并产物并入 lane，让重跑从最新状态继续
+  // （旧检查点保留；合并冲突时 abort，worker 可在任务中自行 merge orch）。
+  if (hasBranch && hasOrch) {
+    const sync = runGit(['merge', '--no-edit', ORCH_BRANCH], dir)
+    if (!sync.ok) runGit(['merge', '--abort'], dir)
+  }
   return { dir, branch }
 }
 

@@ -37,6 +37,7 @@ export function buildWorkerMission(taskDir: string, worktree: string, lane: numb
     `You are a TaskSwarm worker (lane ${lane}) executing task ${taskId} in an isolated git worktree.`,
     `- Worktree (cwd, where code changes go): ${worktree}`,
     `- Task packet: ${taskDir}/PROMPT.md (mission, steps, constraints) and ${taskDir}/STATUS.md (progress).`,
+    `- Your lane worktree is based on taskswarm/orch: the output of ALL previously merged tasks is already in it. REUSE it — do not recreate shared files that already exist. If the task depends on work merged after your lane started, run \`git merge taskswarm/orch --no-edit\` in the worktree first (resolve any conflicts yourself).`,
     'Drive the task with the task_runner tool: `show` to read the packet, `advance` to tick the next',
     'checkbox and checkpoint-commit, `done` when the completion criteria are met, `blocked` with a',
     'reason if you cannot proceed. Call review_step at step boundaries. Use notify_supervisor to',
