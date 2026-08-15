@@ -5,7 +5,7 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
-## [Unreleased]
+## [0.2.12] - 2026-08-15
 
 ### Added
 
@@ -110,6 +110,6 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
-[Unreleased]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...HEAD
+[0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.11
 [0.2.10]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.10

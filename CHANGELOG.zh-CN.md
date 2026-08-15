@@ -5,7 +5,7 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
-## [未发布]
+## [0.2.12] - 2026-08-15
 
 ### 新增
 
@@ -95,6 +95,6 @@
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
-[未发布]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...HEAD
+[0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.11
 [0.2.10]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.10
