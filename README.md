@@ -150,6 +150,7 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 - **[Runbook (ops)](docs/runbook.md)** — standard operating procedures for cleanup, error recovery, and work salvage (required reading for supervisors / AI agents)
 - **[Release Guide](docs/release.md)** — publishing to npm, version bumps, and the 2FA/bypass-token gotcha (for maintainers)
 - **[Known Issues](docs/known-issues.md)** — root-cause analyses and fixes for resolved issues
+- **[Changelog](CHANGELOG.md)** — version-by-version release notes (中文版 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md))
 
 ## License & Credits
 

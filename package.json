@@ -56,7 +56,9 @@
     "templates",
     "LICENSE",
     "README.md",
-    "README.zh-CN.md"
+    "README.zh-CN.md",
+    "CHANGELOG.md",
+    "CHANGELOG.zh-CN.md"
   ],
   "dsh": {
     "bundle": {
