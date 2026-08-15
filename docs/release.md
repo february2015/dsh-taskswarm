@@ -51,7 +51,19 @@ npm publish
 # 5. Verify
 npm view taskswarm version        # → 0.1.1
 npm view taskswarm bin            # → { 'taskswarm-dashboard': 'dashboard/server.mjs' }
+
+# 6. Only after everything above passes, push to GitHub (ordering rule below)
+git push origin master
 ```
+
+> ⚠️ **Publish-before-push ordering (mandatory since 2026-08-15)**: **`npm publish` must
+> succeed and be verified BEFORE `git push` to GitHub.**
+> - Installing from GitHub depends on the version already published to npm; do not
+>   push code that is not yet visible on npm ("repo has new code, installs get the old package").
+> - Pushing never triggers an automatic publish; each version can be published exactly
+>   once (npm rejects duplicates), so the order cannot be fixed afterwards.
+> - If a problem surfaces after the push: bump with `npm version patch` and republish;
+>   never try to overwrite an existing version.
 
 ## Verifying from the user side
 
@@ -92,9 +104,9 @@ Then restart `dsh web` for the new version to take effect.
 ## Release checklist
 
 - [ ] `npm run build` passes
-- [ ] `npm test` passes (16/16)
+- [ ] `npm test` passes
 - [ ] version bumped in `package.json`
 - [ ] `npm pack --dry-run` shows the expected files (lib/dashboard/docs/templates/cordis.patch.yml/README\*)
 - [ ] `npm publish` succeeds
 - [ ] `npm view taskswarm` confirms the new version + bin
-- [ ] master pushed to GitHub (`git push origin master`)
+- [ ] **(only after all of the above)** `git push origin master` to GitHub

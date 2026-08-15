@@ -50,7 +50,15 @@ npm publish
 # 5. 验证
 npm view taskswarm version        # → 0.1.1
 npm view taskswarm bin            # → { 'taskswarm-dashboard': 'dashboard/server.mjs' }
+
+# 6. 全部验证通过后，再 push 到 GitHub（顺序约定见下）
+git push origin master
 ```
+
+> ⚠️ **发布顺序约定（2026-08-15 起，强制）**：**先 `npm publish` 成功、验证通过，再 `git push` 到 GitHub**。
+> - GitHub 渠道安装依赖的是 npm 已发布的版本；代码在 npm 可见之前不要 push，避免"仓库有新代码、装到的是旧包"。
+> - push 不会触发自动发布；每个版本号的发布动作只有一次（npm 拒绝重复发布），顺序错了无法补救。
+> - 若 push 后发现发布有问题：走 `npm version patch` 升新版本号重新发布，不要尝试覆盖。
 
 ## 从用户侧验证
 
@@ -89,9 +97,9 @@ dsh plugin --profile web add dsh-taskswarm@0.2.10   # 显式版本一定重新�
 ## 发布检查清单
 
 - [ ] `npm run build` 通过
-- [ ] `npm test` 通过（16/16）
+- [ ] `npm test` 通过
 - [ ] `package.json` version 已递增
 - [ ] `npm pack --dry-run` 文件清单符合预期（lib/dashboard/docs/templates/cordis.patch.yml/README\*）
 - [ ] `npm publish` 成功
 - [ ] `npm view taskswarm` 确认新版本 + bin
-- [ ] master 已 push 到 GitHub（`git push origin master`）
+- [ ] **（全部通过后才）** `git push origin master` 到 GitHub
