@@ -5,6 +5,38 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.14] - 2026-08-15
+
+### Fixed
+
+- Release guide: package name corrected to `dsh-taskswarm` in all three places (`dsh plugin add`,
+  `npm view`, npm Granular Access Token scope) — the `buju`→`dsh-taskswarm` rename had left the
+  docs pointing at a package that does not exist.
+
+## [0.2.13] - 2026-08-15
+
+### Fixed
+
+- **Lane worktrees now baseline on `taskswarm/orch` HEAD, not the working branch** — root cause of
+  the dsh-localvoice T-5 rpc.ts incident: `createLaneWorktree` ran
+  `git worktree add -b <branch> <dir>` with no commit-ish, so every lane started from the working
+  branch (master) and never saw previously merged tasks' output. Lanes relied on each worker
+  *self-merging* `taskswarm/orch`; a worker that missed the dependency produced incomplete or
+  duplicated implementations that conflicted at merge-back.
+  - New lanes: `worktree add -b <branch> <dir> taskswarm/orch` — inherit all merged output from
+    the start.
+  - Retried lanes: attach the old branch, then auto `git merge taskswarm/orch` (conflict → abort,
+    worker resolves itself).
+  - Worker mission now states the lane is based on `taskswarm/orch` and to reuse merged output.
+  - runbook documents the lane baseline mechanics; new tests cover both new-lane baseline and
+    retry-preserves-checkpoints.
+
+### Changed
+
+- Release guide: mandatory **publish-to-npm-before-push-to-GitHub** ordering — GitHub-channel
+  installs depend on the version already being on npm, and each version can only be published
+  once, so the order cannot be fixed later.
+
 ## [0.2.12] - 2026-08-15
 
 ### Added
@@ -110,6 +142,8 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
+[0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13
 [0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.11
 [0.2.10]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.10

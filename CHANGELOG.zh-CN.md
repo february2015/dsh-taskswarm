@@ -5,6 +5,32 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.14] - 2026-08-15
+
+### 修复
+
+- 发布手册：包名三处全部修正为 `dsh-taskswarm`（`dsh plugin add`、`npm view`、npm Granular
+  Access Token 权限范围）——`buju`→`dsh-taskswarm` 更名后文档仍指向不存在的包名。
+
+## [0.2.13] - 2026-08-15
+
+### 修复
+
+- **lane 工作树改为以 `taskswarm/orch` HEAD 为基线，而非工作分支** —— dsh-localvoice T-5
+  rpc.ts 事故的根因：`createLaneWorktree` 跑 `git worktree add -b <branch> <dir>` 时未指定
+  commit-ish，每个 lane 都从工作分支（master）出发，看不到此前已合并任务的产物；只能靠 worker
+  **自觉** `git merge taskswarm/orch` 补基线，未意识到依赖的 worker 产出残缺/重复实现，
+  merge 回 orch 时互相冲突。
+  - 新 lane：`worktree add -b <branch> <dir> taskswarm/orch` —— 从起点继承全部已合并产物。
+  - 续跑 lane：附着旧分支后引擎**自动** `git merge taskswarm/orch`（冲突 → abort，worker 自行解决）。
+  - worker 任务书明确说明 lane 基于 `taskswarm/orch`、应复用已合并产物。
+  - runbook 记录 lane 基线机制；新增测试覆盖新 lane 基线 + 续跑保留检查点。
+
+### 变更
+
+- 发布手册：强制 **先 `npm publish` 后 `git push`** 的顺序 —— GitHub 渠道安装依赖 npm 已发布
+  版本，且每个版本只能发布一次，顺序事后无法补救。
+
 ## [0.2.12] - 2026-08-15
 
 ### 新增
@@ -95,6 +121,8 @@
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
+[0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13
 [0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12
 [0.2.11]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.11
 [0.2.10]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.10
