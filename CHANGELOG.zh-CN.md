@@ -5,6 +5,23 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.16] - 2026-08-15
+
+### 修复
+
+- **`abort` 后立刻 `start` 不再错乱批次簿记**（bug 报告 `docs/bug-batch-state-write.zh-CN.md`，
+  dsh-localvoice 现场复现）：abort 发生在波次途中时，旧批次的在途 lane 不停止——重建已被删的
+  worktree、spawn 新 worker，并把完成状态写进**已 abort 的旧批次文件**；而新批次文件停在 0 进度。
+  四项修复：
+  - `abort()` 现在 resolve 每批次的 abort waiter；`runLaneWorker` 把在途 worker await 与它对跑，
+    abort 真正停止在途工作而非仅置标志。
+  - `runLane` 在创建 worktree 前、spawn worker 前检查 `aborted`。
+  - `updateLane` 拒绝向终态批次（`aborted`/`complete`）写 lane。
+  - `execute()` 波次边界写盘尊重磁盘终态，不再用内存里陈旧的 `running` 覆盖（此前会"复活"
+    已 abort 的文件）。
+  - `run()` 在仍有（未 abort 的）批次运行中时拒绝启动新批次。
+- 回归测试：波次中 abort → 立刻 start → 旧文件不再被写、新批次正常跑完。
+
 ## [0.2.15] - 2026-08-15
 
 ### 新增
@@ -143,6 +160,7 @@
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.16]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
 [0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13

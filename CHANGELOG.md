@@ -5,6 +5,25 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.16] - 2026-08-15
+
+### Fixed
+
+- **`abort` then immediate `start` no longer corrupts batch bookkeeping** (bug report
+  `docs/bug-batch-state-write.zh-CN.md`, seen on dsh-localvoice): an abort mid-wave left the old
+  batch's in-flight lanes running; they re-created deleted worktrees, spawned new workers, and
+  wrote their completion into the **already-aborted old batch file** — while the new batch's file
+  stayed at zero progress. Four fixes:
+  - `abort()` now resolves a per-batch abort waiter; `runLaneWorker` races the in-flight worker
+    await against it, so abort genuinely stops in-flight work instead of only flagging it.
+  - `runLane` checks `aborted` before creating a worktree and before spawning a worker.
+  - `updateLane` refuses to write lanes into terminal batches (`aborted`/`complete`).
+  - `execute()`'s wave-boundary write respects the on-disk terminal phase instead of overwriting
+    it with the in-memory stale `running` (which was resurrecting aborted files).
+  - `run()` rejects starting a new batch while another (non-aborted) batch is still active.
+- Regression test: abort mid-wave → immediate start → old file never re-written, new batch
+  progresses to complete.
+
 ## [0.2.15] - 2026-08-15
 
 ### Added
@@ -166,6 +185,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.16]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
 [0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13

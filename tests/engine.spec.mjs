@@ -1,6 +1,6 @@
 import { test } from 'node:test'
 import assert from 'node:assert/strict'
-import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync } from 'node:fs'
+import { mkdtempSync, mkdirSync, writeFileSync, rmSync, existsSync, readdirSync, readFileSync, statSync } from 'node:fs'
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { TaskSwarmEngine } from '../lib/orchestrator/engine.js'
@@ -222,6 +222,65 @@ test('engine uses the merger agent to resolve a conflicting lane merge', async (
   // The orch worktree holds the resolved file (agent commit landed).
   const paths = worktreePaths(repo, stateRoot)
   assert.ok(existsSync(join(paths.orchWorktree, 'shared.txt')), 'shared.txt present in orch')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+/** Slow worker: takes a while per lane so abort can land mid-wave. */
+class SlowWorkerHost {
+  constructor() { this.kind = 'slow' }
+  async spawn(spec) {
+    await sleep(800)
+    writeFileSync(join(spec.worktree, `${spec.task.id}.txt`), `${spec.task.id} done\n`, 'utf-8')
+    checkpointCommit(spec.worktree, `feat(${spec.task.id})`)
+    markTaskDone(spec.task.folder)
+    return { exitCode: 0, text: `${spec.task.id} complete` }
+  }
+  abort() {}
+}
+
+test('abort then immediate start: old batch file is never re-written, new batch progresses (bug-batch-state-write)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'F-001-foo'), 'F-001', 'Foo', [])
+  writeTask(join(tasksRoot, 'G-002-bar'), 'G-002', 'Bar', ['F-001'])
+  const stateRoot = join(repo, '.taskswarm')
+  const host = new SlowWorkerHost()
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+
+  // Start batch 1, then abort while wave 1 (F-001) is still running.
+  const h1 = engine.run('all')
+  await sleep(250)
+  assert.equal(engine.abort(), true, 'abort returns true')
+
+  // Old batch file must be terminal and never re-written.
+  const oldPath = join(stateRoot, 'batches', `${h1.batchId}.json`)
+  const oldStat1 = statSync(oldPath)
+  await sleep(400) // let any stale write attempt land
+  const oldStat2 = statSync(oldPath)
+  const oldState = JSON.parse(readFileSync(oldPath, 'utf-8'))
+  assert.equal(oldState.phase, 'aborted', 'old batch phase is aborted')
+  assert.equal(oldStat2.mtimeMs, oldStat1.mtimeMs, 'old batch file mtime unchanged after abort')
+
+  // Immediately start a new batch — must be allowed and must progress.
+  const h2 = engine.run('all')
+  assert.ok(h2.batchId.startsWith('b-'), 'new batch started')
+  assert.notEqual(h2.batchId, h1.batchId)
+
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.ok(state, 'new batch state exists')
+  assert.equal(state.phase, 'complete', `new batch expected complete, got ${state.phase}`)
+  assert.equal(state.id, h2.batchId, 'status() reflects the new batch')
+
+  // The old (aborted) file must still be terminal and untouched.
+  const oldStateAfter = JSON.parse(readFileSync(oldPath, 'utf-8'))
+  assert.equal(oldStateAfter.phase, 'aborted', 'old batch still aborted after new batch ran')
 
   rmSync(repo, { recursive: true, force: true })
 })

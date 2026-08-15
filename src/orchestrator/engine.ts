@@ -82,6 +82,9 @@ interface RunContext {
   paths: WorktreePaths
   paused: boolean
   aborted: boolean
+  /** 由 abort() resolve；runLaneWorker 用它立即中断在途 worker/merger await。 */
+  abortWaiter?: Promise<void>
+  resolveAbort?: () => void
 }
 
 export class TaskSwarmEngine {
@@ -158,8 +161,18 @@ export class TaskSwarmEngine {
   /**
    * Run a batch. Returns immediately with a batch id; execution continues in
    * the background. Monitor via status().
+   * 并发保护（2026-08-15，bug-batch-state-write 报告次因）：本实例仍有**未 abort** 的
+   * execute 上下文时拒绝启动新批次——否则新旧批次并发跑在同一个 TaskSwarmEngine 实例上，
+   * 共用 worktree 路径与 task 目录，互相覆盖。已 abort 的 ctx 允许立刻 start：abort 已
+   * resolveAbort() 中断在途 await，旧 execute 快速收尾（runLane 有 abort 检查、updateLane
+   * 有终态防御，不会写旧文件/建新 worktree）。
    */
   run(scope: string, owner?: unknown): RunHandle {
+    const live = [...this.active.values()].filter((c) => !c.aborted)
+    if (live.length > 0) {
+      const who = live.map((c) => c.batchId).join(', ')
+      throw new Error(`another batch is still running (${who}); abort it first or resume the existing one`)
+    }
     const initialized = this.autoInitIfEmpty(scope)
     const selected = this.select(scope)
     if (selected.length === 0) throw new Error('no tasks match the requested scope')
@@ -186,7 +199,7 @@ export class TaskSwarmEngine {
       }
     }
     writeBatchState(state)
-    const ctx: RunContext = { batchId, config: this.config, paths, paused: false, aborted: false }
+    const ctx = this.makeRunContext(batchId, paths)
     this.active.set(batchId, ctx)
     this.emit({
       type: 'batch-started',
@@ -196,6 +209,13 @@ export class TaskSwarmEngine {
     })
     void this.execute(ctx, waves, state).finally(() => this.active.delete(batchId))
     return { batchId }
+  }
+
+  /** 构造带 abort waiter 的 RunContext（abort 时 resolveAbort() 可中断在途 await）。 */
+  private makeRunContext(batchId: string, paths: WorktreePaths): RunContext {
+    let resolveAbort: (() => void) | undefined
+    const abortWaiter = new Promise<void>((resolve) => { resolveAbort = resolve })
+    return { batchId, config: this.config, paths, paused: false, aborted: false, abortWaiter, resolveAbort }
   }
 
   private async execute(ctx: RunContext, waves: WavePlan, state: BatchState): Promise<void> {
@@ -221,6 +241,14 @@ export class TaskSwarmEngine {
       for (const lane of lanes) {
         const index = state.lanes.findIndex((l) => l.taskId === lane.taskId)
         if (index >= 0) state.lanes[index] = lane
+      }
+      // 2026-08-15（bug-batch-state-write）：波次写回前尊重磁盘终态——abort() 在波次
+      // 执行途中把磁盘 phase 写成 aborted，这里用内存里陈旧的 'running' 整份覆盖会
+      // 复活终态批次（mtime 变化 + updateLane 终态防御失效）。磁盘已终态则直接返回，
+      // 不再写盘（aborted 文件不该被续写任何内容）。
+      const diskState = readBatchState(config.stateRoot, batchId)
+      if (diskState && (diskState.phase === 'aborted' || diskState.phase === 'complete')) {
+        return
       }
       writeBatchState(state)
       // Wave boundary report (supervisor wakes on wave-complete, not lane-done).
@@ -264,6 +292,23 @@ export class TaskSwarmEngine {
       laneLog(existing, 'skipped (already merged)')
       return existing
     }
+    // abort 后不再启动新工作：不建 worktree、不 spawn worker，直接收尾。
+    // （2026-08-15 修复：abort 后在途 runLane 仍会 createLaneWorktree 重建已被删的 worktree
+    //   并 spawn 新 worker，最终用旧 batchId 把完成状态写进已 abort 的旧批次文件——
+    //   bug-batch-state-write 报告主因。）
+    if (ctx.aborted) {
+      const abortedLane: LaneState = {
+        lane: existing?.lane ?? state.lanes.length + 1,
+        taskId: task.id,
+        phase: 'failed',
+        error: 'aborted before lane start',
+        startedAt: new Date().toISOString(),
+        endedAt: new Date().toISOString(),
+        log: [`aborted before lane start`],
+      }
+      laneLog(abortedLane, 'aborted before lane start')
+      return abortedLane
+    }
     const lane: LaneState = {
       lane: existing?.lane ?? state.lanes.length + 1,
       taskId: task.id,
@@ -300,6 +345,15 @@ export class TaskSwarmEngine {
       repoRoot: config.repoRoot,
       model: config.workerModel,
       reviewerModel: config.reviewerModel,
+    }
+
+    // abort 在 worktree 建好后、worker spawn 前触发：不 spawn，直接收尾。
+    if (ctx.aborted) {
+      lane.phase = 'failed'
+      lane.error = 'aborted before worker spawn'
+      lane.endedAt = new Date().toISOString()
+      laneLog(lane, 'aborted before worker spawn')
+      return lane
     }
 
     const result = await this.runLaneWorker(ctx, lane, spec)
@@ -404,11 +458,20 @@ export class TaskSwarmEngine {
   /** Spawn a lane worker under a watchdog timeout (KI-007 方案 B).
    *  worker 失联/事件丢失时 `host.spawn()` 的 await 永不返回，会把 execute() 卡死在当前
    *  wave、后续 wave 永不启动（此前只能靠重启引擎恢复）。超时后 abort worker 并返回
-   *  failed 结果，runLane 正常收尾，wave 继续推进。 */
+   *  failed 结果，runLane 正常收尾，wave 继续推进。
+   *  2026-08-15（bug-batch-state-write）：abort 也要能中断在途 spawn await——否则 abort 后
+   *  旧 execute 仍等 worker 跑完，用旧 batchId 写旧批次文件。 */
   private async runLaneWorker(ctx: RunContext, lane: LaneState, spec: LaneSpec): Promise<WorkerResult> {
     const { config } = ctx
+    // abort 信号：abort() resolve 后立即中断在途 await，避免旧批次 worker 继续跑。
+    const abortNow = ctx.abortWaiter
+      ? ctx.abortWaiter.then(() => ({ exitCode: 1, text: '', error: 'aborted' } satisfies WorkerResult))
+      : undefined
     const timeoutMin = config.laneTimeoutMinutes ?? 0
-    if (!(timeoutMin > 0)) return config.host.spawn(spec)
+    if (!(timeoutMin > 0)) {
+      if (!abortNow) return config.host.spawn(spec)
+      return Promise.race([config.host.spawn(spec), abortNow])
+    }
 
     const timeoutMs = timeoutMin * 60_000
     let timer: NodeJS.Timeout | undefined
@@ -439,7 +502,7 @@ export class TaskSwarmEngine {
       }, timeoutMs)
     })
     try {
-      return await Promise.race([config.host.spawn(spec), timeout])
+      return await Promise.race([config.host.spawn(spec), timeout, ...(abortNow ? [abortNow] : [])])
     } finally {
       if (timer) clearTimeout(timer)
     }
@@ -500,7 +563,7 @@ export class TaskSwarmEngine {
     if (selected.length === 0) return false
     const waves = buildWaves(selected.map((t) => t.task))
     const paths = worktreePaths(this.config.repoRoot, this.config.stateRoot)
-    const ctx: RunContext = { batchId: state.id, config: this.config, paths, paused: false, aborted: false }
+    const ctx = this.makeRunContext(state.id, paths)
     this.active.set(state.id, ctx)
     void this.execute(ctx, waves, state).finally(() => this.active.delete(state.id))
     return true
@@ -511,6 +574,8 @@ export class TaskSwarmEngine {
     const ctx = this.activeContext()
     if (!ctx) return false
     ctx.aborted = true
+    // 唤醒所有在途 await（runLaneWorker 的 Promise.race 会立即走 abort 分支收尾）。
+    ctx.resolveAbort?.()
     const state = readBatchState(this.config.stateRoot, ctx.batchId)
     if (state) {
       state.phase = 'aborted'

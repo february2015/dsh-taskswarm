@@ -61,10 +61,16 @@ export function writeBatchState(state: BatchState): void {
   writeFileSync(batchStatePath(state.stateRoot, state.id), JSON.stringify(state, null, 2), 'utf-8')
 }
 
-/** Update one lane of a batch by id, then persist. */
+/**
+ * Update one lane of a batch by id, then persist.
+ * 终态防御（2026-08-15）：`aborted` / `complete` 批次拒绝再写 lane 状态——
+ * 否则 abort 后仍在途的旧 execute() 会用旧 batchId 把完成状态续写进已终态的旧批次文件
+ * （bug-batch-state-write 报告放大因素）。
+ */
 export function updateLane(stateRoot: string, batchId: string, lane: LaneState): BatchState | null {
   const state = readBatchState(stateRoot, batchId)
   if (!state) return null
+  if (state.phase === 'aborted' || state.phase === 'complete') return state
   const index = state.lanes.findIndex((l) => l.lane === lane.lane && l.taskId === lane.taskId)
   if (index === -1) state.lanes.push(lane)
   else state.lanes[index] = lane

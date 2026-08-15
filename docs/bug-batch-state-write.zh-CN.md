@@ -4,6 +4,11 @@
 > 现场证据位于：`/Users/robin/myProject/dsh-localvoice/.taskswarm/batches/`（dsh-localvoice 项目批次现场）
 > 本文件为**独立交接文档**——供另一位开发者（全新对话，无本会话上下文）直接接手修复。
 
+> ✅ **已修复（v0.2.16，2026-08-15）**：四项修复落地（abort waiter 中断在途 worker、
+> runLane 建 worktree/spawn 前查 abort、updateLane 终态防御、execute 波次写回尊重磁盘终态、
+> run() 并发保护），回归测试 `abort then immediate start`（tests/engine.spec.mjs）覆盖。
+> 本文件保留为根因分析记录。
+
 ---
 
 ## 1. 症状（用户可感知）
