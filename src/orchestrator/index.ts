@@ -60,7 +60,7 @@ export interface Config {
   supervisorMode?: 'off' | 'interactive' | 'supervised' | 'autonomous'
   /** 定时检查间隔（毫秒），默认 60000（1 分钟）。只读状态，零成本。 */
   supervisorCheckIntervalMs?: number
-  /** 距上次 lane 变化超过该时长 → 唤醒"疑似卡住"提醒（毫秒），默认 240000（4 分钟）。 */
+  /** 距上次 lane 变化超过该时长 → 唤醒"疑似卡住"提醒（毫秒），默认 420000（7 分钟）。 */
   supervisorStalledMs?: number
   /** supervisor 通知/提示词语言：'auto'（默认，按会话语言检测）| 'zh-CN' | 'en'。.taskswarm/config.json 的运行时设置优先。 */
   locale?: 'auto' | 'zh-CN' | 'en'
@@ -84,7 +84,7 @@ export const Config: z<Config> = z.object({
   workerProfile: z.string(),
   supervisorMode: z.union([z.const('off'), z.const('interactive'), z.const('supervised'), z.const('autonomous')]).default('supervised'),
   supervisorCheckIntervalMs: z.number().default(60_000),
-  supervisorStalledMs: z.number().default(240_000),
+  supervisorStalledMs: z.number().default(420_000),
   locale: z.union([z.const('auto'), z.const('zh-CN'), z.const('en')]).default('auto'),
   laneTimeoutMinutes: z.number().default(180),
 })

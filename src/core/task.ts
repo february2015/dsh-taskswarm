@@ -327,6 +327,26 @@ export function setTaskStatus(taskDir: string, status: TaskStatus, extra?: { blo
   }
 }
 
+/**
+ * Mark a task as running AND make STATUS.md internally consistent (B4 fix,
+ * 2026-08-15): besides the `**Status:**` line, set `**Current Step:**` to the
+ * first step's title and flip that step's `**Status:**` to 🟢 In Progress.
+ * Without this, STATUS.md shows "🟢 In Progress" next to "**Current Step:**
+ * Not Started" from lane start until the worker's first `advance` — and the
+ * dashboard faithfully renders that misleading "Not Started".
+ * Returns the step title selected (or null when the task has no steps).
+ */
+export function markTaskRunning(taskDir: string, packet: TaskPacket): string | null {
+  const path = taskStatusFilePath(taskDir)
+  if (!existsSync(path)) return null
+  const first = packet.steps[0]
+  if (!first) return null
+  updateStatusField(taskDir, 'Current Step', first.title)
+  appendStepStatus(taskDir, first.title, STEP_STATUS_MARKER.running)
+  updateStatusField(taskDir, 'Status', STATUS_MARKER.running)
+  return first.title
+}
+
 /** Append a row to the STATUS.md execution log. */
 export function appendExecutionLog(taskDir: string, action: string, outcome: string): void {
   const path = taskStatusFilePath(taskDir)

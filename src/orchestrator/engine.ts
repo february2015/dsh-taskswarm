@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scanTasks, resolveScope, buildWaves, type WavePlan } from '../core/discover.ts'
-import { ensureStatusFile, setTaskStatus, markTaskDone, parseStatusFile, appendExecutionLog, scaffoldTask } from '../core/task.ts'
+import { ensureStatusFile, setTaskStatus, markTaskRunning, markTaskDone, parseStatusFile, appendExecutionLog, scaffoldTask } from '../core/task.ts'
 import {
   ensureOrchWorktree, createLaneWorktree, checkpointCommit, mergeLane,
   worktreePaths, removeAllLaneWorktrees, type WorktreePaths,
@@ -336,7 +336,10 @@ export class TaskSwarmEngine {
     // single-lane targeted write and race-free.
 
     ensureStatusFile(task)
+    // B4 fix：启动 lane 时同步更新 Current Step / Step 1 状态，STATUS.md 自洽
+    // （否则 worker 首次 advance 之前 dashboard 一直显示 "Not Started"）。
     setTaskStatus(task.folder, 'running')
+    markTaskRunning(task.folder, task)
     appendExecutionLog(task.folder, 'Lane started', `lane ${lane.lane}`)
 
     const wt = createLaneWorktree(config.repoRoot, paths, task.id)

@@ -21,6 +21,9 @@ TaskSwarm arranges a batch of tasks into dependency-ordered **waves**, runs mult
 - **Conversational supervisor** — shares your session: reports wave completion, lane failures, batch completion; takes verbal commands (start / pause / abort / integrate / open dashboard); notifications and the prompt are **bilingual (中文 / English)** — say "use English" to switch, auto-detected from your session language, persisted to `.taskswarm/config.json` across restarts
 - **Web Dashboard** — local realtime dashboard, zero-dependency node:http + SSE, multiple instances with automatic port negotiation. **Auto-starts when a batch starts and prints the link in chat** — one dashboard per workspace, ever (an already-running instance is reused, never duplicated)
 - **Crash-recoverable** — durable disk state + checkpoints + retained lane branches; after a kill/restart you can salvage work, clean up residue, and re-run
+- **Orch-based lane baselines** — every lane worktree is created from the `taskswarm/orch` integration HEAD, so it inherits all previously merged output instead of re-inventing shared code
+- **Task-packet validation** — `/tswarm-check` + `npm run check:tasks` surface malformed packets (bad IDs, missing steps/criteria) with actionable causes instead of silently skipping them
+- **LLM merge agent** — when a lane merge into `taskswarm/orch` conflicts, an independent merger agent resolves the conflict semantically inside the orch worktree; unresolvable conflicts land the lane in a `conflict` state and pause the batch for supervisor intervention
 
 ## Quick Start
 
@@ -129,18 +132,6 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 | `/tswarm-init [ID]`                | Scaffold example task packets                          |
 
 > Compatible aliases: `/orch`, `/orch-status` and other `/orch-*` commands are equivalent.
-
-## Project Status
-
-**v0.2.14 (npm: `dsh-taskswarm`)** — production-usable; 26/26 tests pass (`npm install && npm run build && npm test`), verified inside a real DSH process:
-
-- ✅ core unit tests + engine integration tests (parallel waves + worktree isolation + orch merge)
-- ✅ real LLM workers running in parallel (deepseek-v4-flash), checkpoint commits + merge into `taskswarm/orch`
-- ✅ conversational supervisor: event wake-ups + periodic stall detection + verbal command control
-- ✅ Web Dashboard verified live (multiple instances, automatic port negotiation)
-- ✅ lane worktrees baseline on `taskswarm/orch` HEAD — every lane inherits all previously merged output (no re-inventing shared code)
-- ✅ task-packet validation: `/tswarm-check` + `npm run check:tasks` surface malformed packets instead of silently skipping them
-- ✅ crash-recoverable batches: durable disk state + checkpoints + retained lane branches; `resume` continues from where the engine left off
 
 ## Hot Reload / HMR Behavior
 

@@ -16,6 +16,7 @@ import {
   buildDashboardState,
   adaptMailbox,
   emptyDashboardState,
+  buildStatusData,
 } from './adapters.mjs'
 
 function tmp() {
@@ -444,4 +445,26 @@ test('latestBatch selection: lexically-last batch file wins when no batchId give
   // Explicit batchId wins over latest.
   const explicit = buildDashboardState({ stateRoot: join(root, '.taskswarm'), batchId: 'b-aaa' })
   assert.equal(explicit.batch.batchId, 'b-aaa')
+})
+
+test('buildStatusData shows "In Progress" when a running lane still says "Not Started" (B4)', () => {
+  const root = tmp()
+  t.after(() => cleanup(root))
+  const taskDir = join(root, 'tasks', 'B4-001-four')
+  mkdirSync(taskDir, { recursive: true })
+  writeFileSync(join(taskDir, 'STATUS.md'), statusMd('B4-001', 'Four', '🟢 In Progress', 'Not Started', 1, [' ', ' ']), 'utf-8')
+
+  // Running lane + initial Current Step → surfaced as "In Progress", not raw "Not Started".
+  const running = buildStatusData(taskDir, 'running')
+  assert.equal(running.currentStep, 'In Progress')
+  assert.equal(running.progress, 0)
+
+  // Pending lane + initial Current Step → keep the raw value (task genuinely not started).
+  const pending = buildStatusData(taskDir, 'pending')
+  assert.equal(pending.currentStep, 'Not Started')
+
+  // A real step title passes through untouched.
+  writeFileSync(join(taskDir, 'STATUS.md'), statusMd('B4-001', 'Four', '🟢 In Progress', 'Step 2', 1, ['x', ' ']), 'utf-8')
+  const advanced = buildStatusData(taskDir, 'running')
+  assert.equal(advanced.currentStep, 'Step 2')
 })

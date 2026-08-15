@@ -5,6 +5,31 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.20] - 2026-08-15
+
+### Fixed
+
+- **Lane no longer shows "Not Started" while actually running (B4)** — `runLane` now calls
+  `markTaskRunning()` at lane start: besides `**Status:** 🟢`, it sets `**Current Step:**` to the
+  first step's title and flips that step's status to In Progress, so STATUS.md is internally
+  consistent from the moment the lane starts (previously "🟢 In Progress" sat next to
+  "**Current Step:** Not Started" until the worker's first `advance`). Dashboard fallback: a
+  running/review/conflict lane whose current step is still the initial "Not Started" renders as
+  "In Progress" instead of surfacing the raw initial value.
+
+### Changed
+
+- **Stall / progress-stall threshold raised 4 → 7 minutes** (`supervisorStalledMs` default
+  240000 → 420000): workers often spend several minutes on research before their first `advance`;
+  4 minutes produced noisy 🐢 progress-stall reminders; 7 minutes is more tolerant while still
+  catching real batching.
+- **README slimmed down** — removed the "Project Status" section (version number + test count +
+  capability list that duplicated Features and inevitably went stale); the two capabilities not
+  already in Features (orch-based lane baselines, task-packet validation, LLM merge agent) were
+  merged into Features. Version history lives in CHANGELOG only. The stale "local link install"
+  TODO was dropped and the remaining TODO (per-task step progress in supervisor reports) moved to
+  known-issues as KI-008 (bilingual).
+
 ## [0.2.19] - 2026-08-15
 
 ### Changed
@@ -224,6 +249,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
 [0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18
 [0.2.17]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.16...v0.2.17

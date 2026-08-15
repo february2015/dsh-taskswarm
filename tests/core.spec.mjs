@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sanitizeNameComponent, resolveRepoSlug } from '../lib/core/naming.js'
-import { parsePrompt, ensureStatusFile, advanceStep, markTaskDone, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
+import { parsePrompt, ensureStatusFile, advanceStep, markTaskRunning, markTaskDone, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
 import { scanTasks, scanTaskFailures, buildWaves } from '../lib/core/discover.js'
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
 import { runGit } from '../lib/core/git.js'
@@ -87,6 +87,29 @@ test('advanceStep ticks checkboxes and markTaskDone sets status', () => {
   markTaskDone(dir)
   assert.equal(parseStatusFile(dir).status, 'done')
   assert.ok(existsSync(join(dir, '.DONE')))
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('markTaskRunning sets Current Step and step status consistently (B4)', () => {
+  const root = tmp()
+  const dir = join(root, 'TASKSWARM-003-baz')
+  writeTask(dir, 'TASKSWARM-003', 'Baz', [], [
+    { title: 'Preflight', items: ['a', 'b'] },
+    { title: 'Work', items: ['c'] },
+  ])
+  const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
+  ensureStatusFile(task)
+  // Before: Current Step is the scaffolded initial "Not Started".
+  assert.equal(parseStatusFile(dir).currentStep, 'Not Started')
+  // After markTaskRunning: Current Step = first step title, status running.
+  const title = markTaskRunning(dir, task)
+  assert.equal(title, 'Preflight')
+  const info = parseStatusFile(dir)
+  assert.equal(info.status, 'running')
+  assert.equal(info.currentStep, 'Preflight')
+  const content = readFileSync(join(dir, 'STATUS.md'), 'utf-8')
+  assert.match(content, /### Step 0: Preflight\n\*\*Status:\*\* 🟢 In Progress/, 'step 0 marked in progress')
+  assert.match(content, /^\*\*Current Step:\*\* Preflight$/m, 'Current Step updated')
   rmSync(root, { recursive: true, force: true })
 })
 

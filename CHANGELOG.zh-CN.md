@@ -5,6 +5,26 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.20] - 2026-08-15
+
+### 修复
+
+- **lane 运行中不再显示 "Not Started"（B4）** —— `runLane` 在 lane 启动时调用 `markTaskRunning()`：
+  除了 `**Status:** 🟢`，还把 `**Current Step:**` 置为第一个 Step 的标题、该 Step 状态标 🟢，
+  STATUS.md 从启动那一刻起自洽（此前"🟢 In Progress"与"**Current Step:** Not Started"并存，
+  直到 worker 首次 `advance`）。dashboard 兜底：running/review/conflict 的 lane 若 Current Step
+  仍是初始值 "Not Started"，显示为 "In Progress"，不再暴露原始初始值。
+
+### 变更
+
+- **停滞阈值 4 → 7 分钟**（`supervisorStalledMs` 默认 240000 → 420000）：worker 常在首次
+  `advance` 前做几分钟调研，4 分钟会产生过多的 🐢 进度停滞提醒；7 分钟更宽容，同时仍能抓住
+  真正的攒批。
+- **README 精简** —— 移除「项目状态」段（版本号 + 测试数 + 与 Features 重复的能力清单，
+  必然过时）；Features 未覆盖的能力（orch 基线 lane、任务包校验、LLM merge agent）并入
+  Features 段。版本历史只留在 CHANGELOG。过时的"本地 link 安装"待办删除，剩余待办
+  （supervisor 汇报附任务步数进度）移入 known-issues 作为 KI-008（双语）。
+
 ## [0.2.19] - 2026-08-15
 
 ### 变更
@@ -195,6 +215,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
 [0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18
 [0.2.17]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.16...v0.2.17

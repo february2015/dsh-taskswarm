@@ -5,6 +5,18 @@
 
 ## OPEN
 
+### KI-008: Supervisor reports lack per-task step progress (completed / total steps)
+
+- **Status:** Open
+- **Symptom:** supervisor status/periodic reports show each lane's phase and percentage, but not
+  "completed steps / total steps" (e.g. 3/5) — the operator cannot tell how many steps a task has
+  and which one it is on at a glance.
+- **Root cause:** report data sources (`estimateEta` / `formatBatchStatus`) read `LaneState`
+  (phase/error/log) and the STATUS.md checkbox ratio only; step-level data exists in the dashboard
+  but is not reused by supervisor text.
+- **Candidate fix:** append per-lane step stats (`parseStatusFile(taskDir)` completed/total steps) to
+  the supervisor report template; resolve the task folder by taskId when building the report.
+
 ### KI-005: Worker's direct writes to task-package files trigger sandbox approval
 
 - **Status:** ✅ Fixed (worker-level permission injection; v0.1.1 workspace, effective after restart)

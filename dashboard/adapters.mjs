@@ -195,7 +195,7 @@ function mapTask(lane, discovered) {
     taskFolder,
     laneNumber: lane.lane,
     status: LANE_PHASE_TO_TASK_STATUS[lane.phase] || lane.phase,
-    statusData: taskFolder ? buildStatusData(taskFolder) : null,
+    statusData: taskFolder ? buildStatusData(taskFolder, lane.phase) : null,
     taskTitle: discovered?.task?.name || null,
     doneFileFound,
     startedAt: lane.startedAt ? Date.parse(lane.startedAt) : null,
@@ -208,8 +208,14 @@ function mapTask(lane, discovered) {
  * plus the STATUS.md checkbox/iteration regexes the upstream parseStatusMd uses
  * (currentStep/checked/total/progress). Returns null when STATUS.md is absent
  * (upstream behavior).
+ *
+ * B4 fix (2026-08-15): when `lanePhase` is running/review and the STATUS.md
+ * `**Current Step:**` is still the initial "Not Started", render it as
+ * "In Progress" (or the generic "Running") instead of surfacing the raw
+ * initial value — the lane is demonstrably executing even before the worker's
+ * first `advance`.
  */
-export function buildStatusData(taskFolder) {
+export function buildStatusData(taskFolder, lanePhase) {
   const statusPath = join(taskFolder, 'STATUS.md')
   if (!existsSync(statusPath)) return null
   const info = parseStatusFile(taskFolder)
@@ -219,8 +225,10 @@ export function buildStatusData(taskFolder) {
   const checked = (content.match(/- \[x\]/gi) || []).length
   const unchecked = (content.match(/- \[ \]/g) || []).length
   const total = checked + unchecked
+  const isInitial = !info.currentStep || /not started/i.test(info.currentStep)
+  const running = lanePhase === 'running' || lanePhase === 'review' || lanePhase === 'conflict'
   return {
-    currentStep: info.currentStep || 'Unknown',
+    currentStep: isInitial && running ? 'In Progress' : (info.currentStep || 'Unknown'),
     status: info.status,
     iteration: iterMatch ? parseInt(iterMatch[1], 10) : 0,
     reviews: reviewMatch ? parseInt(reviewMatch[1], 10) : 0,

@@ -721,7 +721,7 @@ export function registerSupervisor(
 export interface PeriodicSupervisionOptions {
   /** 状态检查间隔（毫秒）。检查本身零成本（只读状态），默认 60s。 */
   checkIntervalMs?: number
-  /** 距上次 lane 状态变化超过该时长仍无动静 → 唤醒一次"疑似卡住"提醒（默认 4 分钟）。 */
+  /** 距上次 lane 状态变化超过该时长仍无动静 → 唤醒一次"疑似卡住"提醒（默认 7 分钟）。 */
   stalledThresholdMs?: number
   /** 初始定时汇报间隔（分钟），来自 .taskswarm/config.json 的持久化设置（默认 0 = 关）。 */
   initialReportIntervalMinutes?: number
@@ -796,7 +796,7 @@ export function startPeriodicSupervision(
   options: PeriodicSupervisionOptions = {},
 ): PeriodicControl {
   const checkIntervalMs = options.checkIntervalMs ?? 60_000
-  const stalledThresholdMs = options.stalledThresholdMs ?? 240_000
+  const stalledThresholdMs = options.stalledThresholdMs ?? 420_000
   const ensureDashboard = options.ensureDashboard
   const dashboardStatus = options.dashboardStatus
   // 定时汇报默认关闭；可用 settings 里的 reportIntervalMinutes 初始化为持久值

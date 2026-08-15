@@ -129,7 +129,7 @@ dsh plugin --profile web add ~/myProject/tswarm   # 追加 taskswarm bundle 到 
 | `includeDoneTasks`                     | false                                    | true 时连有 `.DONE` 的任务也扫描（重跑已完成任务）                         |
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous`（自主度） |
 | `supervisorCheckIntervalMs`            | 60000                                    | 定时检查间隔（1 分钟，只读零成本）                                       |
-| `supervisorStalledMs`                  | 240000                                   | 卡住判定阈值（4 分钟无 lane 变化）                                    |
+| `supervisorStalledMs`                  | 420000                                   | 卡住判定阈值（7 分钟无 lane 变化）                                    |
 | `laneTimeoutMinutes`                   | 180                                      | 单 lane 看门狗超时（分钟）：worker 超时无完成事件 → 强制结束该 lane（failed）并继续下一 wave（KI-007 方案 B）。`0` = 禁用（不建议，退回"只能重启引擎"的假死态） |
 | `locale`                               | `auto`                                   | supervisor 通知/提示词语言：`auto`（按会话语言检测）/ `zh-CN` / `en`。运行时可用文字切换并写入 `.taskswarm/config.json`（见 §3.5） |
 
@@ -236,7 +236,7 @@ lane 结束时引擎判定：STATUS 是 ✅ 或 ❌（或存在 `.DONE`）才算
 
 ### 5.1 卡住检测（默认开启，零成本）
 
-- 每 60s 读一次状态（`checkIntervalMs`）；lane 的 `taskId:phase` 指纹 **4 分钟无变化**
+- 每 60s 读一次状态（`checkIntervalMs`）；lane 的 `taskId:phase` 指纹 **7 分钟无变化**
   （`stalledMs`）**且**所有运行中 lane 的 worker 会话日志也超时 → 唤醒一次
   「疑似卡住」提醒。
 - 会话日志仍在写 = worker 在干活（写大段代码时 lane 阶段不变），不误报。

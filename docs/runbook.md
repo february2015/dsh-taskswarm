@@ -126,7 +126,7 @@ Uninstall: `dsh plugin --profile web remove taskswarm` (a restart is also requir
 | `includeDoneTasks`                     | false                                     | when true, tasks with `.DONE` are also scanned (rerun completed tasks) |
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous` (autonomy level) |
 | `supervisorCheckIntervalMs`            | 60000                                    | periodic check interval (1 minute, read-only, zero cost) |
-| `supervisorStalledMs`                  | 240000                                   | stalled detection threshold (4 minutes without lane changes) |
+| `supervisorStalledMs`                  | 420000                                   | stalled detection threshold (7 minutes without lane changes) |
 | `locale`                               | `auto`                                   | supervisor notification/prompt language: `auto` (detect from session) / `zh-CN` / `en`. Switchable at runtime by text, persisted to `.taskswarm/config.json` (see §3.5) |
 
 ### 3.5 Repository-level Config File (`.taskswarm/config.json`)
@@ -213,7 +213,7 @@ otherwise the lane is judged failed (`task not marked done`). `.DONE` is created
 ### 5.1 Stalled Detection (Enabled by Default, Zero Cost)
 
 - Reads state every 60s (`checkIntervalMs`); if a lane's `taskId:phase` fingerprint shows **no change for
-  4 minutes** (`stalledMs`) **and** the worker session logs of all running lanes are also past their timeout
+  7 minutes** (`stalledMs`) **and** the worker session logs of all running lanes are also past their timeout
   → fire one "possibly stalled" reminder.
 - Session log still being written = the worker is working (lane phase doesn't change while writing large
   code blocks), so no false positives.

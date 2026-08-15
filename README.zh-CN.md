@@ -19,6 +19,9 @@
 - **对话式 Supervisor** —— 与你共享会话：wave 完成、lane 失败、批次完成自动汇报；可指挥它 start / pause / abort / integrate / 开 dashboard；通知与提示词**中英双语**（"用英文汇报"即可切换，自动按你的会话语言判断，写入 `.taskswarm/config.json` 跨重启生效）
 - **Web Dashboard** —— 本地实时仪表盘，零依赖 node:http + SSE，多仓库多实例、端口自动避让。**启动批次时自动拉起并打印链接到会话**——同一工作区始终只有一个 dashboard 实例（已运行的会被复用，绝不重复拉起）
 - **崩溃可恢复** —— 磁盘状态持久化 + 检查点 + lane 分支保留，进程被杀/重启后可抢救产物、清理残留、重跑
+- **orch 基线 lane** —— 每个 lane 工作树从 `taskswarm/orch` 集成 HEAD 创建，直接继承此前全部已合并产物，不重造共享代码
+- **任务包校验** —— `/tswarm-check` + `npm run check:tasks` 让坏格式任务包（ID 缺连字符、缺步骤/验收标准）报出可操作原因，不再静默跳过
+- **LLM merge agent** —— lane 并入 `taskswarm/orch` 冲突时，独立 merger agent 在 orch worktree 内语义化解冲突；无法解决时 lane 进入 `conflict` 态并暂停批次等 supervisor 处置
 
 ## 快速开始
 
@@ -122,20 +125,6 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 | `/tswarm-init [ID]`              | 生成示例任务包                         |
 
 > 兼容别名：`/orch`、`/orch-status` 等 `/orch-*` 命令等价。
-
-## 项目状态
-
-**v0.2.14（npm: `dsh-taskswarm`）** —— 已可生产使用；26/26 测试通过（`npm install && npm run build && npm test`），且已在真实 DSH 进程中真机验证：
-
-- ✅ core 单元测试 + 引擎集成测试（并行 wave + worktree 隔离 + orch 合并）
-- ✅ 真实 LLM worker 并行执行（deepseek-v4-flash），检查点提交 + 合并进 `taskswarm/orch`
-- ✅ 对话式 supervisor：事件唤醒 + 定时检查（卡住检测）+ 文字指令控制
-- ✅ Web Dashboard 真机验证（localhost 多实例、端口自动避让）
-- ✅ lane 工作树以 `taskswarm/orch` HEAD 为基线 —— 每个 lane 继承此前全部已合并产物（不重造共享代码）
-- ✅ 任务包校验：`/tswarm-check` + `npm run check:tasks` 让坏格式任务包现形，不再静默跳过
-- ✅ 崩溃可恢复批次：持久磁盘状态 + 检查点 + 保留 lane 分支；`resume` 从引擎中断处续跑
-- 📋 待办：上述 Dashboard 功能开发完成后，把本机安装从「本地目录 link 安装」（`dsh plugin add $(pwd)`）切换为 npm 安装（`dsh plugin add taskswarm`），让本地执行环境与本地源代码完全独立——当前 link 安装下二者是同一份文件，改代码即改安装（需 `npm run build` + 重启 dsh web 才生效）
-- 📋 待办：supervisor 的定时状态上报与定时汇报（及给用户的状态汇报）中，附带每个 Lane/任务的执行进度「已完成步数/总步数」（如 3/5）——让用户随时知道每个任务一共多少步、执行到哪一步
 
 ## 热更 / HMR 行为
 
