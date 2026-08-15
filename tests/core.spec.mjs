@@ -113,6 +113,26 @@ test('markTaskRunning sets Current Step and step status consistently (B4)', () =
   rmSync(root, { recursive: true, force: true })
 })
 
+test('parseStatusFile reports checked/total checkbox counts (KI-008)', () => {
+  const root = tmp()
+  const dir = join(root, 'TASKSWARM-004-qux')
+  writeTask(dir, 'TASKSWARM-004', 'Qux', [], [
+    { title: 'Work', items: ['a', 'b', 'c'] },
+  ])
+  const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
+  ensureStatusFile(task)
+  // Initially: 0/3.
+  let info = parseStatusFile(dir)
+  assert.equal(info.checked, 0)
+  assert.equal(info.total, 3)
+  // Advance once: 1/3.
+  advanceStep(task, 0)
+  info = parseStatusFile(dir)
+  assert.equal(info.checked, 1)
+  assert.equal(info.total, 3)
+  rmSync(root, { recursive: true, force: true })
+})
+
 test('discover + buildWaves layers independent tasks first', () => {
   const root = tmp()
   const tasksRoot = join(root, 'tasks')

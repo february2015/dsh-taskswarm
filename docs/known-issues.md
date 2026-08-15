@@ -5,17 +5,25 @@
 
 ## OPEN
 
+(No open items — all tracked issues are fixed; see RESOLVED below.)
+
+---
+
+## RESOLVED
+
+<!-- After a fix, move the entry here and note the fixing version/commit. -->
+
 ### KI-008: Supervisor reports lack per-task step progress (completed / total steps)
 
-- **Status:** Open
-- **Symptom:** supervisor status/periodic reports show each lane's phase and percentage, but not
-  "completed steps / total steps" (e.g. 3/5) — the operator cannot tell how many steps a task has
-  and which one it is on at a glance.
+- **Status:** ✅ Fixed (v0.2.22: `parseStatusFile` returns `checked`/`total`; `formatBatchStatus`
+  lane lines show `checked/total` step progress)
+- **Symptom:** supervisor status/periodic reports showed each lane's phase and percentage, but not
+  "completed steps / total steps" (e.g. 3/5).
 - **Root cause:** report data sources (`estimateEta` / `formatBatchStatus`) read `LaneState`
-  (phase/error/log) and the STATUS.md checkbox ratio only; step-level data exists in the dashboard
-  but is not reused by supervisor text.
-- **Candidate fix:** append per-lane step stats (`parseStatusFile(taskDir)` completed/total steps) to
-  the supervisor report template; resolve the task folder by taskId when building the report.
+  (phase/error/log) and the STATUS.md checkbox ratio only; step-level data existed in the dashboard
+  but was not reused by supervisor text.
+- **Fix:** `parseStatusFile` now counts checkboxes (checked/total); `formatBatchStatus` maps
+  taskId → task folder via `scanTasks` and appends `checked/total` to each lane line.
 
 ### KI-005: Worker's direct writes to task-package files trigger sandbox approval
 
@@ -66,13 +74,6 @@
   (actions.jsonl/events.jsonl), branch-protection detection, CI/PR lifecycle, and the
   batch-summary markdown template. The event contract is already in place, so these can be
   filled in incrementally on top of it.
-
----
-
-## RESOLVED
-
-<!-- After a fix, move the entry here and note the fixing version/commit. -->
-
 ### KI-004: Residual lane worktrees and branches after a killed process/abort block the next batch
 
 - **Status:** ✅ Fixed (in source; `src/core/worktree.ts` `createLaneWorktree`)

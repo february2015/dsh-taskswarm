@@ -5,7 +5,16 @@
 
 ## OPEN
 
+（当前无 OPEN 条目——全部已知问题已修复，见 RESOLVED 区。）
+
+---
+
+## RESOLVED
+
 ### KI-008: supervisor 汇报不含任务步数进度（已完成步数/总步数）
+
+**状态**：✅ 已修复（v0.2.22：`parseStatusFile` 返回 checked/total，`formatBatchStatus` 的
+lane 行显示 `已完成/总数`）
 
 **现象**：supervisor 的定时状态上报 / 定时汇报中，每个 lane 只有阶段（running/merged 等）与百分比，
 不含「已完成步数/总步数」（如 3/5）——用户无法一眼看出任务一共多少步、执行到哪一步。
@@ -13,15 +22,9 @@
 **根因**：汇报数据源（`estimateEta` / `formatBatchStatus`）只读 `LaneState`（phase/error/log）与
 STATUS.md 的勾选比例，未汇总分步信息；dashboard 已有步级数据但 supervisor 文本未复用。
 
-**候选修复**：在 supervisor 汇报模板中，对每个 running lane 附加
-`parseStatusFile(taskDir)` 的分步统计（`completed steps / total steps`）；数据源可在
-`engine.status()` 或汇报构建处按 taskId 反查任务包补上。
+**修复**：`parseStatusFile` 增加 checkbox 统计（checked/total）；`formatBatchStatus` 通过
+`scanTasks` 建立 taskId→folder 映射，每个 lane 行附 `checked/total` 步数进度。
 
----
-
-## RESOLVED
-
-<!-- 修复后把条目移到这里，注明修复版本/commit。 -->
 
 ### KI-007: 引擎按 wave 推进且内存状态不重读——lane 全 merged 后后续 wave 不调度，只能重启引擎
 

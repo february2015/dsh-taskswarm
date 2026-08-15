@@ -7,6 +7,8 @@
  */
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
+import { scanTasks } from './discover.ts'
+import { parseStatusFile } from './task.ts'
 
 export type LanePhase = 'pending' | 'running' | 'review' | 'conflict' | 'merged' | 'failed' | 'skipped'
 export type BatchPhase = 'planning' | 'running' | 'paused' | 'aborted' | 'complete'
@@ -104,10 +106,18 @@ export function formatBatchStatus(state: BatchState): string {
     `Started: ${state.startedAt}  Scope: ${state.scope}`,
     '',
   ]
+  // KI-008: taskId → task folder 映射（读 STATUS.md 的步数进度）。
+  const byId = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const lane of state.lanes) {
     const verdict = lane.reviewVerdict && lane.reviewVerdict !== 'none' ? ` review=${lane.reviewVerdict}` : ''
     const error = lane.error ? ` error=${lane.error.slice(0, 120)}` : ''
-    lines.push(`  lane ${lane.lane} [${lane.phase}] ${lane.taskId}${verdict}${error}`)
+    const folder = byId.get(lane.taskId)
+    let progress = ''
+    if (folder) {
+      const info = parseStatusFile(folder)
+      if (info.total) progress = ` ${info.checked}/${info.total}`
+    }
+    lines.push(`  lane ${lane.lane} [${lane.phase}] ${lane.taskId}${progress}${verdict}${error}`)
   }
   return lines.join('\n')
 }

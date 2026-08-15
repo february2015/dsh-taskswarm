@@ -23,6 +23,19 @@
 - **任务包校验** —— `/tswarm-check` + `npm run check:tasks` 让坏格式任务包（ID 缺连字符、缺步骤/验收标准）报出可操作原因，不再静默跳过
 - **LLM merge agent** —— lane 并入 `taskswarm/orch` 冲突时，独立 merger agent 在 orch worktree 内语义化解冲突；无法解决时 lane 进入 `conflict` 态并暂停批次等 supervisor 处置
 
+## 为什么用 TaskSwarm，DSH 不是已经有 subagent 了吗？
+
+DSH 原生 `subagent` / `workflow` / `goal` 是**会话式、一次性**调度——适合临时委派。TaskSwarm 是架在其上的**项目级编排层**：
+
+| | DSH 原生 subagent | TaskSwarm |
+| ------------- | --------------------------------- | ------------------------------- |
+| 任务形态 | 聊天里一句话 | **任务包**（PROMPT.md / STATUS.md）——可版本化、可批量、可复用 |
+| 并行度 | 手动 | **波次规划**：按依赖拓扑分波、每波并行 lane |
+| 隔离 | 共享工作区（写文件会冲突） | **git worktree 隔离**：每 lane 独立分支 + 检查点，合并进 `taskswarm/orch` |
+| 质量门 | 无 | **独立 Reviewer**（PASS / REVISE） |
+| 可恢复 | 进程结束即消失 | **持久批次状态**（`.taskswarm/batches/*.json`）：重启 / resume / 跳过已完成 lane |
+| 可观测 | 盯着聊天 | **supervisor 事件汇报 + Web Dashboard**，批次启动自动拉起、链接打印到会话 |
+
 ## 快速开始
 
 ### 1. 安装（三选一）

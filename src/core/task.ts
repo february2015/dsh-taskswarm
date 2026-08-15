@@ -64,6 +64,9 @@ export interface TaskStatusInfo {
   currentStep: string
   done: boolean
   blockedReason?: string
+  /** 已完成 checkbox 数 / 总 checkbox 数（KI-008：supervisor 汇报显示步数进度）。 */
+  checked?: number
+  total?: number
 }
 
 export function extractTaskIdFromFolderName(folderName: string): string | null {
@@ -225,6 +228,10 @@ export function parseStatusFile(taskDir: string): TaskStatusInfo {
   const blockerMatch = content.match(/^\*\*Blocker:\*\*\s*(.+)$/m)
   if (stepMatch) info.currentStep = stepMatch[1].trim()
   if (blockerMatch) info.blockedReason = blockerMatch[1].trim()
+  // KI-008: checkbox 统计（勾选数/总数）供 supervisor 汇报与状态显示用。
+  const checked = (content.match(/- \[x\]/gi) ?? []).length
+  const total = checked + (content.match(/- \[ \]/g) ?? []).length
+  if (total > 0) { info.checked = checked; info.total = total }
   const raw = statusMatch ? statusMatch[1].trim() : ''
   if (raw.includes('✅') || info.done) info.status = 'done'
   else if (raw.includes('❌')) info.status = 'blocked'

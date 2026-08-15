@@ -25,6 +25,20 @@ TaskSwarm arranges a batch of tasks into dependency-ordered **waves**, runs mult
 - **Task-packet validation** — `/tswarm-check` + `npm run check:tasks` surface malformed packets (bad IDs, missing steps/criteria) with actionable causes instead of silently skipping them
 - **LLM merge agent** — when a lane merge into `taskswarm/orch` conflicts, an independent merger agent resolves the conflict semantically inside the orch worktree; unresolvable conflicts land the lane in a `conflict` state and pause the batch for supervisor intervention
 
+## Why TaskSwarm, when DSH already has subagents?
+
+DSH's native `subagent` / `workflow` / `goal` are *conversational, one-shot* scheduling — great for
+ad-hoc delegation. TaskSwarm is a **project-level orchestration layer** on top of them:
+
+|               | DSH native subagents              | TaskSwarm                                                                                       |
+| ------------- | --------------------------------- | ----------------------------------------------------------------------------------------------- |
+| Task shape    | one sentence in chat              | **task packets** (PROMPT.md / STATUS.md) — versioned, batchable, reusable                       |
+| Parallelism   | manual                            | **wave planning**: dependency-topological waves, parallel lanes per wave                        |
+| Isolation     | shared workspace (writes collide) | **git worktree isolation**: per-lane branch + checkpoints, merged into `taskswarm/orch`         |
+| Quality gate  | none                              | **independent Reviewer** (PASS / REVISE)                                                        |
+| Resumability  | gone when the process ends        | **durable batch state** (`.taskswarm/batches/*.json`): restart / resume / skip finished lanes   |
+| Observability | watch the chat                    | **supervisor event reports + Web Dashboard**, auto-started with the batch, link printed in chat |
+
 ## Quick Start
 
 ### 1. Install (pick one)

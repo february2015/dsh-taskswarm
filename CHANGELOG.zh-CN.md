@@ -5,6 +5,23 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.22] - 2026-08-15
+
+### 新增
+
+- **状态汇报附任务步数进度（KI-008）** —— `parseStatusFile` 返回 `checked`/`total` 勾选统计，
+  `/tswarm-status` 与 supervisor 状态行的每个 lane 显示 `已完成/总数`（如
+  `lane 1 [running] T-8 2/7`），一眼看清任务一共多少步、执行到哪一步。
+
+### 变更
+
+- **README 新增「TaskSwarm vs DSH 原生 subagent」对比表** —— 对比表（任务形态 / 并行度 /
+  隔离 / 质量门 / 可恢复 / 可观测）从社区帖移入 README，正面回答最常见的第一个问题。
+- **删除社区介绍帖**（`docs/community-post*.md`）——其唯一独有内容（对比表）已并入 README，
+  其余与 README 重复。
+- **known-issues 整理** —— 英文版把早已修复的 KI-005/KI-006 从 OPEN 移到 RESOLVED（中文版
+  本就在 RESOLVED）；KI-008 移入 RESOLVED 并注明修复。两版 OPEN 区现在均为空。
+
 ## [0.2.21] - 2026-08-15
 
 移除 bug 交接清单文档（`docs/bug-交接清单.zh-CN.md`）——清单中四个 bug（B1 abort 簿记、
@@ -221,6 +238,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19

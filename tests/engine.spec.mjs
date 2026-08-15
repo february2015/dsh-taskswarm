@@ -139,6 +139,8 @@ test('engine runs 2 independent tasks in parallel then a dependent task', async 
   const rendered = formatBatchStatus(state)
   assert.ok(rendered.includes('A-001'))
   assert.ok(rendered.includes('merged'))
+  // KI-008: lane lines carry step progress (checked/total).
+  assert.match(rendered, /\d+\/\d+/, 'lane lines show checked/total step progress')
 
   rmSync(repo, { recursive: true, force: true })
 })

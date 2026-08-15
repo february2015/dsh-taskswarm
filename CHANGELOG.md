@@ -5,6 +5,26 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.22] - 2026-08-15
+
+### Added
+
+- **Per-task step progress in status reports (KI-008)** — `parseStatusFile` now returns
+  `checked`/`total` checkbox counts, and `/tswarm-status` / supervisor status lines show
+  `checked/total` per lane (e.g. `lane 1 [running] T-8 2/7`), so you can see how many steps a task
+  has and which one it is on at a glance.
+
+### Changed
+
+- **README gains the "TaskSwarm vs DSH native subagents" comparison** — the comparison table
+  (task shape / parallelism / isolation / quality gate / resumability / observability) moved from
+  the community post into the README, where it answers the most common first question.
+- **Community posts removed** (`docs/community-post*.md`) — their only unique content (the
+  comparison table) now lives in the README; the rest duplicated it.
+- **Known-issues tidied** — KI-005/KI-006 (both long fixed) moved from OPEN to RESOLVED in the
+  English doc (the Chinese doc already had them there); KI-008 moved to RESOLVED with its fix
+  note. OPEN sections are now empty in both languages.
+
 ## [0.2.21] - 2026-08-15
 
 Removed the bug-handoff document (`docs/bug-交接清单.zh-CN.md`) — all four tracked bugs (B1 abort
@@ -255,6 +275,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
