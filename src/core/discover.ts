@@ -10,7 +10,7 @@
  */
 import { existsSync, readdirSync, statSync } from 'node:fs'
 import { join, isAbsolute, resolve } from 'node:path'
-import { parsePrompt, extractTaskIdFromFolderName, type TaskPacket, type TaskStatusInfo, parseStatusFile } from './task.ts'
+import { parsePrompt, explainParseFailure, extractTaskIdFromFolderName, type TaskPacket, type TaskStatusInfo, parseStatusFile } from './task.ts'
 
 export interface DiscoveredTask {
   task: TaskPacket
@@ -28,6 +28,38 @@ export interface WavePlan {
 
 export function defaultTasksRoot(repoRoot: string): string {
   return join(repoRoot, 'tasks')
+}
+
+export interface TaskParseFailure {
+  folder: string
+  reason: string
+}
+
+/**
+ * Walk a tasks root and report directories that contain a PROMPT.md but fail
+ * to parse (parsePrompt → null). `scanTasks` silently skips those, which is
+ * how malformed packets used to vanish without a trace — surface them here.
+ */
+export function scanTaskFailures(tasksRoot: string): TaskParseFailure[] {
+  if (!existsSync(tasksRoot)) return []
+  const failures: TaskParseFailure[] = []
+  for (const entry of readdirSync(tasksRoot).sort()) {
+    const folder = join(tasksRoot, entry)
+    if (!statSync(folder).isDirectory()) continue
+    const promptPath = join(folder, 'PROMPT.md')
+    if (!existsSync(promptPath)) continue
+    const areaName = entry.includes('-') ? entry.split('-')[0]!.toLowerCase() : 'tasks'
+    const task = parsePrompt(promptPath, folder, areaName)
+    if (!task) failures.push({ folder: entry, reason: explainParseFailure(promptPath, folder) })
+  }
+  return failures
+}
+
+/** One-line block describing parse failures, or '' when there are none. */
+export function formatTaskFailures(failures: TaskParseFailure[]): string {
+  if (failures.length === 0) return ''
+  const lines = failures.map((f) => `  - ${f.folder}：${f.reason}`)
+  return `⚠️ ${failures.length} 个任务包解析失败（会被引擎跳过）：\n${lines.join('\n')}`
 }
 
 /**

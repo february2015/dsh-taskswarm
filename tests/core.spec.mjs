@@ -4,8 +4,8 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sanitizeNameComponent, resolveRepoSlug } from '../lib/core/naming.js'
-import { parsePrompt, ensureStatusFile, advanceStep, markTaskDone, parseStatusFile } from '../lib/core/task.js'
-import { scanTasks, buildWaves } from '../lib/core/discover.js'
+import { parsePrompt, ensureStatusFile, advanceStep, markTaskDone, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
+import { scanTasks, scanTaskFailures, buildWaves } from '../lib/core/discover.js'
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
 
 function tmp() {
@@ -116,5 +116,53 @@ test('mailbox write/read/ack round-trips', () => {
     assert.ok(ackMessage(inbox, file))
   }
   assert.equal(readInbox(inbox).length, 0)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('human-readable legacy packets are reported as parse failures, not silently dropped', () => {
+  const root = tmp()
+  // The exact failure mode from dsh-localvoice: folder T1 + "# T1 插件骨架" heading.
+  const dir = join(root, 'T1')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'PROMPT.md'), ['# T1 插件骨架', '', '## 目标', '搭建插件骨架', '', '## 验收标准（DoD）', '- [ ] ok'].join('\n'), 'utf-8')
+  // parsePrompt itself returns null…
+  assert.equal(parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks'), null)
+  // …explainParseFailure gives the actionable cause…
+  const reason = explainParseFailure(join(dir, 'PROMPT.md'), dir)
+  assert.match(reason, /# Task:/)
+  // …and scanTaskFailures surfaces the folder (where scanTasks silently skips it).
+  assert.equal(scanTasks(root).length, 0)
+  const fails = scanTaskFailures(root)
+  assert.equal(fails.length, 1)
+  assert.equal(fails[0].folder, 'T1')
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('invalid heading ID (T1 without hyphen) explains the [A-Z]+-\\d+ rule', () => {
+  const root = tmp()
+  const dir = join(root, 'TASK1')
+  mkdirSync(dir, { recursive: true })
+  writeFileSync(join(dir, 'PROMPT.md'), ['# Task: TASK1 — 无连字符', '', '## Mission', 'do it'].join('\n'), 'utf-8')
+  assert.equal(parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks'), null)
+  assert.match(explainParseFailure(join(dir, 'PROMPT.md'), dir), /\[A-Z\]\+-\\d\+/)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('checkPacketQuality flags missing steps / criteria / file scope', () => {
+  const root = tmp()
+  const ok = join(root, 'OK-001-x')
+  writeTask(ok, 'OK-001', 'X', [], [{ title: 'A', items: ['a'] }])
+  const okTasks = scanTasks(root, true)
+  assert.equal(okTasks.length, 1)
+  assert.deepEqual(checkPacketQuality(okTasks[0].task), [])
+
+  const bad = join(root, 'BAD-002-y')
+  mkdirSync(bad, { recursive: true })
+  writeFileSync(join(bad, 'PROMPT.md'), ['# Task: BAD-002 — Y', '', '**Size:** S', '', '## Mission', 'do it', '', '## Completion Criteria', '- [ ] done'].join('\n'), 'utf-8')
+  const packet = parsePrompt(join(bad, 'PROMPT.md'), bad, 'bad')
+  assert.ok(packet)
+  const warnings = checkPacketQuality(packet)
+  assert.ok(warnings.some((w) => w.includes('Step')))
+  assert.ok(warnings.some((w) => w.includes('File Scope')))
   rmSync(root, { recursive: true, force: true })
 })

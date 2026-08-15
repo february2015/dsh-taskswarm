@@ -8,6 +8,7 @@
  * Commands:
  *   /orch [scope]       start a batch (scope: all | <task-id> | <path>)
  *   /orch-plan [scope]  preview waves and dependencies (no execution)
+ *   /orch-check         validate all task packets (parse + structure + waves)
  *   /orch-status        current batch / lane progress
  *   /orch-pause         pause after the current wave
  *   /orch-resume        resume a paused batch
@@ -32,8 +33,8 @@ import { shouldWake, supervisorEventReport, registerSupervisor, startPeriodicSup
 import { DashboardManager } from './dashboard.ts'
 import { resolveLocale, type LocaleState } from './i18n.ts'
 import { readSettings } from './settings.ts'
-import { scanTasks, formatWavePlan } from '../core/discover.ts'
-import { scaffoldTask } from '../core/task.ts'
+import { scanTasks, scanTaskFailures, formatTaskFailures, formatWavePlan, buildWaves } from '../core/discover.ts'
+import { scaffoldTask, checkPacketQuality } from '../core/task.ts'
 import { formatBatchStatus, type BatchState } from '../core/status.ts'
 
 export const name = 'tswarm-orchestrator'
@@ -320,6 +321,10 @@ export function apply(ctx: Context, config: Config): void {
       const status = ref.engine.status()
       const waveCount = status?.waves ?? 0
       let text = `Batch ${handle.batchId} started: ${status?.lanes.length ?? 0} tasks in ${waveCount} wave(s). Monitor with /tswarm-status.`
+      const failures = scanTaskFailures(ref.tasksRoot)
+      if (failures.length > 0) {
+        text += `\n⚠️ ${failures.length} 个任务包解析失败被跳过：${failures.map((f) => f.folder).join(', ')}（/tswarm-check 查看原因）`
+      }
       // 波次执行即自动拉起 dashboard 并把链接打印出来（正常跑着就想看状态）。
       const d = await dashboards.ensure(ref.repoRoot)
       text += d.ok ? `\n📊 Dashboard: ${d.url}` : `\n⚠️ Dashboard 启动失败：${d.text}`
@@ -333,9 +338,35 @@ export function apply(ctx: Context, config: Config): void {
     handler: (invocation) => withEngine(invocation, (ref) => {
       const scope = invocation.rawInput.trim() || 'all'
       const { waves, count } = ref.engine.plan(scope)
+      const failNote = formatTaskFailures(scanTaskFailures(ref.tasksRoot))
       return ok(count === 0
-        ? `No tasks found under ${ref.tasksRoot}. Run /tswarm-init to scaffold examples, or check the tasks root.`
-        : `${count} task(s):\n\n${formatWavePlan(waves)}`)
+        ? `${failNote ? failNote + '\n\n' : ''}No tasks found under ${ref.tasksRoot}. Run /tswarm-init to scaffold examples, or check the tasks root.`
+        : `${count} task(s):\n\n${formatWavePlan(waves)}${failNote ? `\n\n${failNote}` : ''}`)
+    }),
+  })
+
+  registerCommand(['tswarm-check', 'orch-check'], {
+    description: 'validate all task packets: parse status, structure warnings, and the wave plan',
+    handler: (invocation) => withEngine(invocation, (ref) => {
+      const failures = scanTaskFailures(ref.tasksRoot)
+      const tasks = scanTasks(ref.tasksRoot, true)
+      const lines: string[] = [`任务包校验（${ref.tasksRoot}）：解析成功 ${tasks.length} 个${failures.length > 0 ? `，失败 ${failures.length} 个` : ''}`]
+      if (failures.length > 0) {
+        lines.push('', '❌ 解析失败（会被引擎静默跳过，必须修复）：')
+        for (const f of failures) lines.push(`  - ${f.folder}：${f.reason}`)
+      }
+      const warnings: string[] = []
+      for (const t of tasks) {
+        for (const w of checkPacketQuality(t.task)) warnings.push(`  - ${t.task.id}（${t.task.name}）：${w}`)
+      }
+      if (warnings.length > 0) {
+        lines.push('', '⚠️ 结构警告（不影响解析，但建议修复）：')
+        lines.push(...warnings)
+      }
+      if (tasks.length > 0) {
+        lines.push('', formatWavePlan(buildWaves(tasks.map((t) => t.task))))
+      }
+      return ok(lines.join('\n'))
     }),
   })
 

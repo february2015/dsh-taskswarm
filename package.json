@@ -70,7 +70,8 @@
     "prepare": "npm run build",
     "build": "tsc -p tsconfig.json",
     "test": "npm run build && node --test tests/*.spec.mjs",
-    "dashboard": "node dashboard/server.mjs"
+    "dashboard": "node dashboard/server.mjs",
+    "check:tasks": "node scripts/check-tasks.mjs"
   },
   "engines": {
     "node": ">=22.0.0"

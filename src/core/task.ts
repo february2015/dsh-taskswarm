@@ -176,6 +176,44 @@ export function parsePrompt(promptPath: string, taskFolder: string, areaName: st
   }
 }
 
+/**
+ * Explain why a PROMPT.md failed to parse (parsePrompt returned null).
+ * Mirrors the ID-resolution logic in parsePrompt so the reason matches the
+ * actual failure. Returns a human-readable reason string (never null when the
+ * file exists but does not parse; callers may fall back to a generic message).
+ */
+export function explainParseFailure(promptPath: string, taskFolder: string): string {
+  let content: string
+  try {
+    content = readFileSync(promptPath, 'utf-8')
+  } catch {
+    return 'PROMPT.md 不可读'
+  }
+  if (!content.trim()) return 'PROMPT.md 为空'
+  const heading = content.match(/^#\s+Task:\s+([A-Z]+-\d+)\s*[-—]\s*(.+)$/m)
+  if (!heading) {
+    const hasTaskHeading = /^#\s+Task:/m.test(content)
+    return hasTaskHeading
+      ? '任务标题 ID 不合法：需形如 "T-1"（[A-Z]+-\\d+），例如 "# Task: T-1 — 名称"'
+      : `缺少 "# Task: <ID> — <名称>" 标题（ID 须形如 "T-1"），且目录名 "${basename(taskFolder)}" 也无法推断 ID（需形如 "T-1-xxx"）`
+  }
+  return '未知解析失败'
+}
+
+/**
+ * Structure-quality warnings for a packet that DID parse but may trip up
+ * workers (no steps / no criteria / no file scope). Not fatal — the task
+ * still runs — but worth surfacing via /tswarm-check.
+ */
+export function checkPacketQuality(task: TaskPacket): string[] {
+  const warnings: string[] = []
+  if (!task.mission) warnings.push('## Mission 为空')
+  if (task.steps.length === 0) warnings.push('没有 "### Step N:" 步骤清单（worker 无法推进任务状态）')
+  if (task.completionCriteria.length === 0) warnings.push('没有 "## Completion Criteria" 验收项（worker 不知道何时算完成）')
+  if (task.fileScope.length === 0) warnings.push('缺 "## File Scope"（建议声明影响文件，便于并行 lane 隔离）')
+  return warnings
+}
+
 /** Read the status line out of a STATUS.md. */
 export function parseStatusFile(taskDir: string): TaskStatusInfo {
   const path = taskStatusFilePath(taskDir)

@@ -67,6 +67,7 @@ TaskSwarm 的**唯一权威状态**是磁盘上的 `.taskswarm/`，不是内存�
 | ----------------------- | ---------------------------------------- | ----------- | ------------------------------------------ |
 | 看批次状态                   | `/tswarm-status` 或读 `.taskswarm/batches/*.json` | diagnostic  | 直接查证，无需确认                                  |
 | 看波次计划 / 依赖图             | `/tswarm-plan [scope]`、`/tswarm-deps`        | diagnostic  | 只读，直接做                                     |
+| **任务包不生效 / 被跳过**        | `/tswarm-plan` 里看不到某任务、`/tswarm-check` 报解析失败 | diagnostic  | 先 `/tswarm-check` 看原因，再按 §4.2 格式修复，重跑 plan 验证 |
 | 列活跃 lane 与 worktree     | `/tswarm-sessions`                         | diagnostic  | 只读，直接做                                     |
 | 看 worker 会话日志 / mailbox | `~/.dsh/sessions/…`、`.taskswarm/mailbox/…`    | diagnostic  | §5.3 / §5.4                                |
 | 开/关定时汇报                 | "每隔 X 分钟汇报一次"                            | tier0_known | `tswarm_supervisor_report_interval <N>`（0=关） |
@@ -157,23 +158,48 @@ operator 用文字设置的运行时配置，持久化在 `<repo>/.taskswarm/con
 - 空项目时 `start all` 也会自动初始化示例任务（`autoInitIfEmpty`）。
 - 手写：在 `tasks/` 下建 `<ID>-<slug>/` 目录，放 `PROMPT.md` + `STATUS.md`。
 
-### 4.2 PROMPT.md 格式规范（`src/core/task.ts` 解析规则）
+### 4.2 PROMPT.md 格式规范（**机器解析，严格**，`src/core/task.ts`）
+
+> ⚠️ 这是**机器格式**，不是给人看的自然文档。格式不合规 = 该任务被**静默跳过**
+> （`parsePrompt` 返回 null，`scanTasks` 直接 continue，plan/status 里根本看不到它）。
+> 历史上最典型的事故：任务包按人类可读格式写（`# T1 xxx` / `## 目标` / `## 任务内容` /
+> `## 验收标准`），8 个任务全被跳过而无人察觉。写完务必跑 `/tswarm-check` 或
+> `npm run check:tasks` 自查。
 
 ```
-# Task: <ID> — <名称>          ← 必须，ID 形如 [A-Z]+-\d+（缺省时从目录名推断）
-**Size:** S | M | L | XL
-## Review Level: 2              ← 可选
-## Dependencies                 ← 依赖：`- <ID>` 或 `**Requires:** <ID>`（可多个）
-## Mission
-### Step 1: <标题>
-- [ ] <待办项>                  ← 步骤的清单项
-## Completion Criteria
-- [ ] <验收项>
-## File Scope                   ← 可选，声明影响文件
+# Task: <ID> — <名称>          ← 必须；ID 形如 [A-Z]+-\d+（如 T-1、VOICE-001）
+                                  ⚠️ "T1" 没有连字符 → 不合法 → 整个包被跳过！
+                                  ⚠️ 节标题是英文且精确匹配，中文节名（## 目标）不识别
+**Size:** S | M | L | XL       ← 可选，缺省 M
+## Review Level: 2             ← 可选，缺省 2
+## Dependencies                ← 依赖（可多个）：
+                                  `- T-1` 或 `**Requires:** T-1, T-2`
+                                  ⚠️ ID 必须也是 [A-Z]+-\d+，写 "T1" 不会被识别
+## Mission                     ← 任务说明（自由文本，可放背景/设计引用）
+### Step 1: <标题>              ← 步骤必须是 "### Step N:" 开头（编号 1. 2. 3. 不识别）
+- [ ] <待办项>                  ← 步骤下必须是 "- [ ]" checkbox 清单
+## Completion Criteria          ← 验收项，"- [ ]" 清单（⚠️ 英文标题，不是"验收标准"）
+## File Scope                   ← 可选，声明影响文件（"- path" 每行一个）
 ```
 
-- 依赖决定波次 DAG；未知依赖 ID 不阻塞（§10.2）。
-- 执行期追加修订：写在分界线 `---` 以下的 `## Amendments (Added During Execution)`。
+**常见坑速查**：
+
+| 症状 | 原因 | 修法 |
+|---|---|---|
+| 任务在 plan 里消失 | 标题 ID 缺连字符（`# T1 xxx`）或没有 `# Task:` 标题 | 改 `# Task: T-1 — xxx` |
+| 任务消失 / ID 乱 | 目录名没有 `<ID>-<slug>` 形态且标题无合法 ID | 目录改 `T-1-xxx`，或标题写合法 ID |
+| worker 不动 / 状态不推进 | Mission 里没有 `### Step N:` + `- [ ]` | 改步骤为 `### Step N:` + checkbox |
+| 永远不算完成 | 没有 `## Completion Criteria` | 加验收项 checklist |
+| 依赖不生效 / 乱序成波 | Dependencies 节缺失或 ID 写法错 | 写 `- T-1`（连字符 ID） |
+| 同波 merge 冲突 | 多任务改同一文件 | 用 File Scope 声明影响文件，共享文件注明"只追加不重构" |
+
+**写完任务包后的自查清单**（每次新建/手改后必做）：
+1. `npm run check:tasks`（或 DSH 会话里 `/tswarm-check`）→ 无"解析失败"，警告可接受；
+2. `/tswarm-plan all` → 能看到你的任务、波次符合预期、无 "Unresolved dependency references"；
+3. scope 命中：`start <文件夹名>` / `<ID>` 都能选中该任务。
+
+- 依赖决定波次 DAG（§10）；未知依赖 ID 当作已满足并显示在 "Unresolved dependency references" 里，不阻塞计划；
+- 执行期追加修订：写在分界线 `---` 以下的 `## Amendments (Added During Execution)`（分界线以上不可变）。
 
 ### 4.3 STATUS.md 字段（worker 持有，引擎/工具读取）
 
