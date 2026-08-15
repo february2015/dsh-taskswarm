@@ -5,6 +5,12 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.21] - 2026-08-15
+
+Removed the bug-handoff document (`docs/bug-交接清单.zh-CN.md`) — all four tracked bugs (B1 abort
+bookkeeping, B2 progress reporting, B3 merge-conflict handling, B4 Current Step display) are now
+fixed (v0.2.18–v0.2.20) and their root-cause analyses live in known-issues.
+
 ## [0.2.20] - 2026-08-15
 
 ### Fixed
@@ -249,6 +255,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
 [0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18

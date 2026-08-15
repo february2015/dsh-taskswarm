@@ -5,6 +5,12 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.21] - 2026-08-15
+
+移除 bug 交接清单文档（`docs/bug-交接清单.zh-CN.md`）——清单中四个 bug（B1 abort 簿记、
+B2 进度上报、B3 merge 冲突处理、B4 Current Step 显示）均已修复（v0.2.18–v0.2.20），
+根因分析保留在 known-issues。
+
 ## [0.2.20] - 2026-08-15
 
 ### 修复
@@ -215,6 +221,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
 [0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
 [0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18
