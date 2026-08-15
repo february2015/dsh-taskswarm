@@ -9,8 +9,7 @@
 
 ### 修复
 
-- **`abort` 后立刻 `start` 不再错乱批次簿记**（bug 报告 `docs/bug-batch-state-write.zh-CN.md`，
-  dsh-localvoice 现场复现）：abort 发生在波次途中时，旧批次的在途 lane 不停止——重建已被删的
+- **`abort` 后立刻 `start` 不再错乱批次簿记**（dsh-localvoice 现场复现）：abort 发生在波次途中时，旧批次的在途 lane 不停止——重建已被删的
   worktree、spawn 新 worker，并把完成状态写进**已 abort 的旧批次文件**；而新批次文件停在 0 进度。
   四项修复：
   - `abort()` 现在 resolve 每批次的 abort waiter；`runLaneWorker` 把在途 worker await 与它对跑，

@@ -9,8 +9,8 @@ The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); thi
 
 ### Fixed
 
-- **`abort` then immediate `start` no longer corrupts batch bookkeeping** (bug report
-  `docs/bug-batch-state-write.zh-CN.md`, seen on dsh-localvoice): an abort mid-wave left the old
+- **`abort` then immediate `start` no longer corrupts batch bookkeeping** (seen on
+  dsh-localvoice): an abort mid-wave left the old
   batch's in-flight lanes running; they re-created deleted worktrees, spawned new workers, and
   wrote their completion into the **already-aborted old batch file** — while the new batch's file
   stayed at zero progress. Four fixes:
