@@ -132,12 +132,15 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 
 ## Project Status
 
-**In development (v0.1)** — the core engine and command layer are implemented and tested (`npm install && npm run build && npm test`, 9/9), and verified inside a real DSH process:
+**v0.2.14 (npm: `dsh-taskswarm`)** — production-usable; 26/26 tests pass (`npm install && npm run build && npm test`), verified inside a real DSH process:
 
 - ✅ core unit tests + engine integration tests (parallel waves + worktree isolation + orch merge)
 - ✅ real LLM workers running in parallel (deepseek-v4-flash), checkpoint commits + merge into `taskswarm/orch`
 - ✅ conversational supervisor: event wake-ups + periodic stall detection + verbal command control
 - ✅ Web Dashboard verified live (multiple instances, automatic port negotiation)
+- ✅ lane worktrees baseline on `taskswarm/orch` HEAD — every lane inherits all previously merged output (no re-inventing shared code)
+- ✅ task-packet validation: `/tswarm-check` + `npm run check:tasks` surface malformed packets instead of silently skipping them
+- ✅ crash-recoverable batches: durable disk state + checkpoints + retained lane branches; `resume` continues from where the engine left off
 
 ## Hot Reload / HMR Behavior
 
