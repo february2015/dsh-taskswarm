@@ -28,6 +28,7 @@ import {
 } from '../core/status.ts'
 import { runGit } from '../core/git.ts'
 import { SUPERVISOR_SESSION, drainInbox, sessionInboxDir, writeMailboxMessage } from '../core/mailbox.ts'
+import type { MergeResult } from '../worker/merger.ts'
 import type { WorkerHost, LaneSpec, WorkerResult } from './worker-host.ts'
 
 export interface TaskSwarmEvent {
@@ -54,6 +55,14 @@ export interface EngineConfig {
   host: WorkerHost
   workerModel?: string
   reviewerModel?: string
+  /** LLM merge agent 用的模型（独立 reviewer/merger 路由，默认跟随当前会话模型）。 */
+  mergerModel?: string
+  /** Merge 完成后运行的验证命令（P2：merge verify，如 ["npm test"]）。 */
+  mergeVerifyCommands?: string[]
+  /** LLM merge agent 看门狗超时（分钟）：卡住无结果 → 超时返回 unresolved 保留现场
+   *  （只报告不杀——不阻塞后续 merge 队列，agent 会话由 spawner 的 finally 收尾）。
+   *  默认 10（借鉴 TaskPlane merge.timeout_minutes）。0 = 不启用。 */
+  mergerTimeoutMinutes?: number
   includeDoneTasks?: boolean
   /** 单 lane 看门狗超时（分钟）：worker 超过该时长无完成事件 → 强制结束该 lane（failed，
    *  worktree/分支保留可排查），避免失联 worker 永久卡住当前 wave（KI-007 方案 B）。
@@ -79,8 +88,23 @@ export class TaskSwarmEngine {
   private readonly active = new Map<string, RunContext>()
   /** batchId → 发起该 batch 的会话 agent（事件只回发给它，避免跨会话串消息）。 */
   private readonly batchOwners = new Map<string, unknown>()
+  /**
+   * Merge mutex：同一 wave 的多个 lane 并行完成，但 orch worktree 的
+   * `git merge` 必须串行——并发 merge 会被 git 锁拒绝（stderr 为空，
+   * "another git process seems to be running" 类错误）。用 promise 链
+   * 把每个 lane 的 merge（含 merger agent 解决）串起来。
+   */
+  private mergeQueue: Promise<unknown> = Promise.resolve()
 
   constructor(private readonly config: EngineConfig) {}
+
+  /** 串行化 orch merge：排队执行 fn，前面的 merge 完成后再跑下一个。 */
+  private serializedMerge<T>(fn: () => Promise<T>): Promise<T> {
+    const next = this.mergeQueue.then(fn, fn)
+    // 链上保持"最终值"而非"结果"，避免 reject 打断后续排队。
+    this.mergeQueue = next.catch(() => undefined)
+    return next
+  }
 
   /** Fire a structured lifecycle event through the configured hook (non-fatal). */
   private emit(event: TaskSwarmEvent): void {
@@ -297,10 +321,64 @@ export class TaskSwarmEngine {
       lane.phase = 'review'
       lane.error = 'reviewer requested revisions'
     } else {
-      lane.phase = 'merged'
       markTaskDone(task.folder)
-      const merged = mergeLane(config.repoRoot, paths, wt)
-      if (!merged.ok) {
+      // orch merge 必须串行（同一 wave 多 lane 并行完成，并发 git merge 会被锁拒绝）。
+      const merged = await this.serializedMerge(async () => {
+        const first = mergeLane(config.repoRoot, paths, wt)
+        if (first.ok) return first
+        // merge 失败：现场已保留（lane worktree/branch + orch 冲突状态，P0）。
+        // 尝试 LLM merger agent 语义化解冲突（P1，借鉴 TaskPlane merge agent）；
+        // agent 不可用（headless host 未实现 spawnMerger）或仍失败 → failed 保留现场。
+        const merger = config.host.spawnMerger
+        if (!merger) return first
+        laneLog(lane, `merge failed (${first.stderr.slice(0, 120).trim() || 'git lock/state error'}) — spawning merger agent`)
+        // merger 卡住时不能阻塞 serializedMerge 队列：看门狗超时（P3，借鉴 TaskPlane
+        // merge timeout）。超时 = 保留现场返回 unresolved，agent 会话由 spawner finally 收尾。
+        const mergerTimeoutMin = config.mergerTimeoutMinutes ?? 10
+        const mergerPromise = (async () => {
+          // 必须绑定 host：方法解引用后 this 会丢（ES class 方法）。
+          return merger.call(config.host, {
+            orchWorktree: paths.orchWorktree,
+            laneBranch: wt.branch,
+            taskId: task.id,
+            repoRoot: config.repoRoot,
+            verifyCommands: config.mergeVerifyCommands,
+          })
+        })()
+        let mr: MergeResult
+        if (mergerTimeoutMin > 0) {
+          const timer = new Promise<MergeResult>((resolve) => {
+            setTimeout(() => {
+              laneLog(lane, `merger agent timed out after ${mergerTimeoutMin} min — preserving merge state`)
+              resolve({ status: 'CONFLICT_UNRESOLVED', summary: `merger agent timed out after ${mergerTimeoutMin} min` })
+            }, mergerTimeoutMin * 60_000).unref?.()
+          })
+          mr = await Promise.race([mergerPromise, timer])
+        } else {
+          mr = await mergerPromise
+        }
+        try {
+          if (mr.status === 'SUCCESS' || mr.status === 'CONFLICT_RESOLVED') {
+            // Merger 已解决冲突并 commit 进 orch：清理 lane worktree/branch。
+            const removeWt = runGit(['worktree', 'remove', '--force', wt.dir], config.repoRoot)
+            if (!removeWt.ok) runGit(['worktree', 'prune'], config.repoRoot)
+            runGit(['branch', '-d', wt.branch], config.repoRoot)
+            laneLog(lane, `merge resolved by merger agent (${mr.status}): ${mr.summary.slice(0, 160)}`)
+            return { ...first, ok: true }
+          }
+          lane.phase = 'failed'
+          lane.error = `merge failed: ${first.stderr.slice(0, 200)}; merger agent: ${mr.summary.slice(0, 200)}`
+          return first
+        } catch (e) {
+          lane.phase = 'failed'
+          lane.error = `merge failed: ${first.stderr.slice(0, 200)}; merger agent error: ${e instanceof Error ? e.message : String(e)}`
+          return first
+        }
+      })
+      if (merged.ok) {
+        lane.phase = 'merged'
+      } else if (lane.phase !== 'failed') {
+        // 兜底：merger 不可用且 merge 失败（merger 分支内部已置 failed 的不再覆盖）。
         lane.phase = 'failed'
         lane.error = `merge failed: ${merged.stderr.slice(0, 200)}`
       }

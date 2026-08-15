@@ -111,18 +111,27 @@ export function checkpointCommit(worktreeDir: string, message: string): { ok: bo
 /**
  * Merge a completed lane branch into the orch branch (via the orch worktree),
  * then clean up the lane worktree and branch.
+ *
+ * On success: the lane worktree and branch are removed.
+ * On failure: **everything is preserved** — the lane worktree, the lane
+ * branch, and the in-progress merge state inside the orch worktree. A failed
+ * merge means a conflict (or git error) that needs inspection: the worker's
+ * work must not be destroyed by a `branch -D`, or the merge state cannot be
+ * handed to a merge agent / manual resolution. Callers decide how to recover
+ * (merge agent, supervisor intervention, manual resolve) and then clean up.
  */
 export function mergeLane(repoRoot: string, paths: WorktreePaths, lane: LaneWorktree): GitResult {
   ensureGitIdentity(repoRoot)
   const merged = runGit(['merge', '--no-edit', lane.branch], paths.orchWorktree)
+  if (!merged.ok) {
+    // Preserve the merge failure state: do NOT remove the lane worktree,
+    // do NOT delete the lane branch, and leave the orch merge in progress
+    // (conflict markers intact) for inspection / merge-agent resolution.
+    return merged
+  }
   const removeWt = runGit(['worktree', 'remove', '--force', lane.dir], repoRoot)
   if (!removeWt.ok) runGit(['worktree', 'prune'], repoRoot)
   runGit(['branch', '-d', lane.branch], repoRoot)
-  if (!merged.ok) {
-    // Surface the merge failure but keep cleanup semantics: the lane branch
-    // still exists for inspection when the merge failed.
-    runGit(['branch', '-D', lane.branch], repoRoot)
-  }
   return merged
 }
 

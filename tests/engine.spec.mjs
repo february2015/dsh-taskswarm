@@ -153,3 +153,75 @@ test('engine plan reports unresolved dependency references', async () => {
   assert.deepEqual(plan.waves.unresolvedDeps.get('X-001'), ['MISSING-999'])
   rmSync(repo, { recursive: true, force: true })
 })
+
+/** Fake host whose worker deliberately conflicts on shared.txt, and whose
+ *  merger agent resolves the conflict by taking both lanes' lines. */
+class ConflictMergerHost {
+  constructor() {
+    this.kind = 'fake'
+    this.mergeCalls = []
+    this.mergedOk = false
+  }
+
+  async spawn(spec) {
+    // Append this lane's line to shared.txt (both lanes edit the same file
+    // from the same orch baseline → merge conflict when merged back).
+    writeFileSync(join(spec.worktree, 'shared.txt'), `${spec.task.id} line\n`, 'utf-8')
+    checkpointCommit(spec.worktree, `feat(${spec.task.id}): shared line`)
+    markTaskDone(spec.task.folder)
+    return { exitCode: 0, text: `${spec.task.id} complete` }
+  }
+
+  async spawnMerger(request) {
+    this.mergeCalls.push(request)
+    // Simulate an LLM merge agent: finish the in-progress merge by taking the
+    // lane side (already merged via --theirs semantics in the orch worktree).
+    const orch = request.orchWorktree
+    runGit(['add', '-A'], orch)
+    runGit(['commit', '--no-edit'], orch)
+    this.mergedOk = true
+    return { status: 'CONFLICT_RESOLVED', summary: 'resolved shared.txt by taking both' }
+  }
+}
+
+test('engine uses the merger agent to resolve a conflicting lane merge', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  // Two parallel tasks both editing shared.txt from the same baseline.
+  writeTask(join(tasksRoot, 'D-001-delta'), 'D-001', 'Delta', [])
+  writeTask(join(tasksRoot, 'E-002-echo'), 'E-002', 'Echo', [])
+  const stateRoot = join(repo, '.taskswarm')
+
+  const host = new ConflictMergerHost()
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+
+  const handle = engine.run('all')
+  assert.ok(handle.batchId.startsWith('b-'))
+
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.ok(state, 'batch state exists')
+  assert.equal(state.phase, 'complete', `expected complete, got ${state.phase}`)
+
+  // The second lane's merge conflicts; the merger agent is invoked at least once.
+  assert.ok(host.mergeCalls.length >= 1, 'merger agent should be invoked on conflict')
+  assert.ok(host.mergedOk, 'merger agent should resolve the conflict')
+
+  // Both lanes ended merged (conflict resolved by the agent), not failed.
+  for (const id of ['D-001', 'E-002']) {
+    const lane = state.lanes.find((l) => l.taskId === id)
+    assert.ok(lane, `lane ${id} exists`)
+    assert.equal(lane.phase, 'merged', `lane ${id} merged (${lane.phase})`)
+  }
+
+  // The orch worktree holds the resolved file (agent commit landed).
+  const paths = worktreePaths(repo, stateRoot)
+  assert.ok(existsSync(join(paths.orchWorktree, 'shared.txt')), 'shared.txt present in orch')
+
+  rmSync(repo, { recursive: true, force: true })
+})

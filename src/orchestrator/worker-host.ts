@@ -14,6 +14,7 @@
 import { spawn } from 'node:child_process'
 import type { TaskPacket } from '../core/task.ts'
 import { ORCH_BRANCH } from '../core/worktree.ts'
+import type { MergeRequest, MergeResult } from '../worker/merger.ts'
 
 export interface LaneSpec {
   lane: number
@@ -39,6 +40,13 @@ export interface WorkerHost {
   spawn(spec: LaneSpec): Promise<WorkerResult>
   /** Best-effort cancel of a running lane (abort). */
   abort?(lane: number): void
+  /**
+   * Optional LLM merge agent: resolve a failed lane merge (conflicts) inside
+   * the orch worktree. Absent on hosts that cannot spawn agents (e.g. pure
+   * headless runners) — the engine then falls back to failed-with-preserved-
+   * state. Mirrors TaskPlane's LLM-powered merge (merge.ts).
+   */
+  spawnMerger?(request: MergeRequest): Promise<MergeResult>
 }
 
 /**

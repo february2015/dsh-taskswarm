@@ -5,6 +5,28 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.15] - 2026-08-15
+
+### 新增
+
+- **LLM merger agent（P1）** —— lane 并入 `taskswarm/orch` 的 `git merge` 失败（冲突）时，
+  引擎 spawn 一个 merger agent（spawn 方式同 reviewer，`src/worker/merger.ts`）在 orch
+  worktree 内**语义化解冲突**：读双方意图 → 编辑文件 → 完成 merge commit。移植自 TaskPlane
+  的 LLM 合并 agent。配置：`mergerModel`。
+- **Merge 验证（P2）** —— merge 成功后可选跑验证命令（`mergeVerifyCommands`，如
+  `["npm test"]`），随 merger agent 任务书下发。
+- **Merge 看门狗（P3）** —— merger agent 卡住时超时（`mergerTimeoutMinutes`，默认 10 分钟），
+  保留现场返回 unresolved，不阻塞后续串行 merge 队列。
+
+### 修复
+
+- **merge 失败不再销毁现场（P0）** —— `mergeLane` 此前在 merge 失败时对 lane 分支执行
+  `git branch -D`（与自身注释矛盾），把 worker 的工作删掉；现在完整保留 lane worktree、
+  分支与 orch 冲突状态，供排查 / merger agent 解决 / 人工介入。
+- **orch worktree 并发 merge 串行化** —— 同一 wave 并行完成的 lane 此前会并发对同一 orch
+  worktree 跑 `git merge`，被 git 锁拒绝（stderr 为空、lane 静默失败）；现在 merge 走
+  promise 链互斥队列。
+
 ## [0.2.14] - 2026-08-15
 
 ### 修复
@@ -121,6 +143,7 @@
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
 [0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13
 [0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12

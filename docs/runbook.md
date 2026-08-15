@@ -136,7 +136,8 @@ Precedence: **config.json (runtime, latest intent) > plugin `Config` (installer 
 | `reportIntervalMinutes` | integer ≥ 0 (0 = off) | "report every 15 minutes" → `tswarm_supervisor_report_interval` tool |
 
 Candidate future keys (design slots, read at engine creation): `supervisorMode`,
-`workerModel`, `reviewerModel`, `includeDoneTasks`. The file is merge-written JSON,
+`workerModel`, `reviewerModel`, `includeDoneTasks`, `mergerModel`, `mergerTimeoutMinutes`,
+`mergeVerifyCommands`. The file is merge-written JSON,
 so new keys never break older readers.
 
 Language auto-detection: in `auto` mode the supervisor samples the batch-owner
@@ -327,7 +328,22 @@ Determination: in the batch json, `lane.error` + `log` give the reason. Three co
 | ----------------------------- | ----------------------------- | --------------------------- |
 | `worker exited 1` (exitCode≠0) | worker process exited abnormally | read the worker session log for the reason (§5.3), fix, then rerun |
 | `task not marked done`        | worker exited normally but STATUS.md is not ✅/❌ | judge whether the work is done; rerun, or mark and rerun (§4.4) |
-| `merge failed: ...`           | conflict merging into orch      | investigate and resolve the conflict in the `_orch` worktree |
+| `merge failed: ...`           | conflict merging into orch      | the engine first tries the LLM merger agent (below); if it still fails, investigate and resolve in the `_orch` worktree |
+
+**LLM merger agent (introduced 2026-08-15, v0.2.15)**: when a lane's `git merge` into
+`taskswarm/orch` fails (conflict), the engine spawns an independent merger agent inside the
+`_orch` worktree to **resolve the conflict semantically** (read both sides' intent → edit files →
+finish the merge commit) — "two workers editing the same file" conflicts no longer need manual
+intervention. Mechanics:
+
+- The failure scene is **fully preserved**: lane worktree, `taskswarm/<taskId>` branch, and the
+  orch conflict state are never cleaned up, so a human can step in anytime (no more `branch -D`
+  destroying the scene).
+- Lane merges within a wave run **serially** (concurrent `git merge` is rejected by git's lock).
+- A stuck merger has a watchdog (`mergerTimeoutMinutes`, default 10 min): on timeout it preserves
+  the scene and returns unresolved without blocking later merges in the queue.
+- After resolving, optional verification commands run (`mergeVerifyCommands`, e.g. `["npm test"]`).
+- Config: `mergerModel`, `mergerTimeoutMinutes`, `mergeVerifyCommands`.
 
 Rerunning a failed lane (not-done tasks are re-scanned by default):
 

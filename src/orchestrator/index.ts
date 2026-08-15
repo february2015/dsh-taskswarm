@@ -46,6 +46,12 @@ export interface Config {
   stateRoot?: string
   workerModel?: string
   reviewerModel?: string
+  /** LLM merge agent 的模型路由（默认跟随当前会话模型）。 */
+  mergerModel?: string
+  /** Merge 完成后运行的验证命令（如 ["npm test"]）。 */
+  mergeVerifyCommands?: string[]
+  /** LLM merge agent 看门狗超时（分钟），默认 10（0 = 禁用）。 */
+  mergerTimeoutMinutes?: number
   includeDoneTasks?: boolean
   host?: 'in-process' | 'headless'
   dshBin?: string
@@ -69,6 +75,9 @@ export const Config: z<Config> = z.object({
   stateRoot: z.string(),
   workerModel: z.string(),
   reviewerModel: z.string(),
+  mergerModel: z.string(),
+  mergeVerifyCommands: z.array(z.string()),
+  mergerTimeoutMinutes: z.number().default(10),
   includeDoneTasks: z.boolean(),
   host: z.union([z.const('in-process'), z.const('headless')]).default('in-process'),
   dshBin: z.string(),
@@ -212,7 +221,7 @@ export function apply(ctx: Context, config: Config): void {
       host = new InProcessWorkerHost({
         agents: ctx.get('agents') as never,
         agentDefaultModel: ctx.get('agentDefaultModel') as never,
-      })
+      }, { mergerModel: config.mergerModel })
     }
 
     // Conversational supervisor (ported from TaskPlane): the session agent
@@ -241,6 +250,9 @@ export function apply(ctx: Context, config: Config): void {
       laneTimeoutMinutes: config.laneTimeoutMinutes,
       ...(config.workerModel ? { workerModel: config.workerModel } : {}),
       ...(config.reviewerModel ? { reviewerModel: config.reviewerModel } : {}),
+      ...(config.mergerModel ? { mergerModel: config.mergerModel } : {}),
+      ...(config.mergeVerifyCommands?.length ? { mergeVerifyCommands: config.mergeVerifyCommands } : {}),
+      ...(config.mergerTimeoutMinutes != null ? { mergerTimeoutMinutes: config.mergerTimeoutMinutes } : {}),
       includeDoneTasks: config.includeDoneTasks,
       ...(supervisorAgent?.followup
         ? {

@@ -141,7 +141,8 @@ operator 用文字设置的运行时配置，持久化在 `<repo>/.taskswarm/con
 | `reportIntervalMinutes` | 整数 ≥0（0=关） | "每隔 15 分钟汇报一次" → `tswarm_supervisor_report_interval` 工具 |
 
 候选扩展键（设计槽位，引擎创建时读取）：`supervisorMode`、`workerModel`、
-`reviewerModel`、`includeDoneTasks`。文件为 JSON 合并写，新增键不影响旧读者。
+`reviewerModel`、`includeDoneTasks`、`mergerModel`、`mergerTimeoutMinutes`、
+`mergeVerifyCommands`。文件为 JSON 合并写，新增键不影响旧读者。
 
 语言自动检测：`auto` 时读取发起批次会话的最近用户消息，CJK 占比启发式
 （中文会话 → zh-CN，否则 → en；无信号兜底 zh-CN）。
@@ -346,7 +347,20 @@ rm .taskswarm/batches/<batchId>.json
 | ----------------------------- | ----------------------------- | --------------------------- |
 | `worker exited 1`（exitCode≠0） | worker 进程异常退出                 | 读 worker 会话日志找原因（§5.3），修后重跑 |
 | `task not marked done`        | worker 正常退出但 STATUS.md 不是 ✅/❌ | 判断活是否干完；重跑或标记后重跑（§4.4）      |
-| `merge failed: ...`           | 并入 orch 冲突                    | 在 `_orch` worktree 里查冲突解决   |
+| `merge failed: ...`           | 并入 orch 冲突                    | 引擎已自动尝试 LLM merger agent 解决（见下）；仍失败 → 在 `_orch` worktree 里查冲突手动解决 |
+
+**LLM merger agent（2026-08-15 引入，v0.2.15）**：lane 并入 `taskswarm/orch` 的 `git merge`
+失败（冲突）时，引擎会 spawn 一个独立 merger agent 在 `_orch` worktree 里**语义化解冲突**
+（读双方意图 → 编辑文件 → 完成 merge commit）——无需人工介入即可解决"两 worker 改同一文件"
+类冲突。机制要点：
+
+- 失败现场**完整保留**：lane worktree、`taskswarm/<taskId>` 分支、orch 冲突状态都不会被清理，
+  人工随时可介入（不再 `branch -D` 丢现场）。
+- 同一 wave 的多个 lane merge **串行**执行（并发 `git merge` 会被 git 锁拒绝）。
+- merger 卡住有看门狗（`mergerTimeoutMinutes`，默认 10 分钟）：超时保留现场返回 unresolved，
+  不会阻塞后续 merge 队列。
+- merger 解决后可选跑验证命令（`mergeVerifyCommands`，如 `["npm test"]`）。
+- 配置：`mergerModel`（模型路由）、`mergerTimeoutMinutes`、`mergeVerifyCommands`。
 
 重跑失败 lane（未 done 任务默认会被重新扫描）：
 

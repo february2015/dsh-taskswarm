@@ -12,6 +12,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { registerLaneTools, buildWorkerMission, type LaneRuntime } from '../worker/lane-tools.ts'
 import { mountStandardTools, grantWorkerFullAccess } from '../worker/worker-tools.ts'
 import { createReviewerSpawner, lastAssistantText, type ReviewerAgent, type ReviewerDeps } from '../worker/reviewer.ts'
+import { createMergerSpawner, type MergeRequest, type MergeResult } from '../worker/merger.ts'
 import type { LaneSpec, WorkerHost, WorkerResult } from './worker-host.ts'
 
 export interface InProcessHostDeps {
@@ -22,8 +23,11 @@ export interface InProcessHostDeps {
 export class InProcessWorkerHost implements WorkerHost {
   readonly kind = 'in-process'
   private readonly running = new Map<number, ReviewerAgent>()
+  private readonly mergerModel?: string
 
-  constructor(private readonly deps: InProcessHostDeps) {}
+  constructor(private readonly deps: InProcessHostDeps, options: { mergerModel?: string } = {}) {
+    this.mergerModel = options.mergerModel
+  }
 
   async spawn(spec: LaneSpec): Promise<WorkerResult> {
     const selection = this.deps.agentDefaultModel.currentSelection()
@@ -86,6 +90,12 @@ export class InProcessWorkerHost implements WorkerHost {
         // disposal failure must not mask the lane result
       }
     }
+  }
+
+  /** Resolve a failed lane merge with an LLM merge agent inside the orch worktree. */
+  async spawnMerger(request: MergeRequest): Promise<MergeResult> {
+    const spawner = createMergerSpawner(this.deps, this.mergerModel)
+    return spawner(request)
   }
 
   abort(lane: number): void {

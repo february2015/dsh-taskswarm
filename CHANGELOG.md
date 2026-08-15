@@ -5,6 +5,30 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.15] - 2026-08-15
+
+### Added
+
+- **LLM merger agent (P1)** — when a lane's `git merge` into `taskswarm/orch` fails (conflict), a
+  merger agent (spawned like the reviewer, `src/worker/merger.ts`) resolves the conflict
+  semantically inside the orch worktree: reads both sides' intent, edits files, completes the
+  merge commit. Adapted from TaskPlane's LLM-powered merge agent. Config: `mergerModel`.
+- **Merge verification (P2)** — optional commands run after a successful merge
+  (`mergeVerifyCommands`, e.g. `["npm test"]`), passed into the merger agent's mission.
+- **Merge watchdog (P3)** — a stuck merger agent times out (`mergerTimeoutMinutes`, default 10)
+  and preserves the scene, without blocking later merges in the serialized queue.
+
+### Fixed
+
+- **Merge failure no longer destroys the scene (P0)** — `mergeLane` previously ran
+  `git branch -D` on the lane branch when the merge failed, contradicting its own comment and
+  deleting the worker's work; it now preserves the lane worktree, branch, and orch conflict state
+  for inspection / merger-agent resolution / manual intervention.
+- **Concurrent merges into the orch worktree are serialized** — parallel lanes finishing in the
+  same wave previously ran `git merge` on the same orch worktree concurrently, which git rejects
+  with a lock error (empty stderr, lane silently failed); merges now go through a promise-chain
+  mutex.
+
 ## [0.2.14] - 2026-08-15
 
 ### Fixed
@@ -142,6 +166,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14
 [0.2.13]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.13
 [0.2.12]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.11...v0.2.12
