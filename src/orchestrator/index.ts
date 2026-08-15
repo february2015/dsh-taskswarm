@@ -423,7 +423,7 @@ export function apply(ctx: Context, config: Config): void {
     handler: (invocation) => withEngine(invocation, (ref) => {
       const state = ref.engine.status()
       if (!state) return ok('No batch yet.')
-      const active = state.lanes.filter((l) => l.phase === 'running' || l.phase === 'review')
+      const active = state.lanes.filter((l) => l.phase === 'running' || l.phase === 'review' || l.phase === 'conflict')
       if (active.length === 0) return ok('No active lanes.')
       return ok(active.map((l) => `lane ${l.lane} [${l.phase}] ${l.taskId} @ ${l.worktree ?? '?'}`).join('\n'))
     }),

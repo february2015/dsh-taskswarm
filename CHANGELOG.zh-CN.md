@@ -5,6 +5,42 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.19] - 2026-08-15
+
+### 变更
+
+- **worker 任务书强制逐步 `advance`（B2）** —— 任务书新增硬性规则：每完成一个 checkbox
+  **立即** `advance`、禁止攒批到最后统一勾选、`done` 仅在所有 Completion Criteria 满足后才可调用、
+  禁止手改 STATUS.md。修复进度显示长时间停低值后 0→100% 跳变、以及崩溃恢复只能靠最后一次提交
+  的问题。
+- **进度停滞监督（B2）** —— 定时 supervisor 跟踪每个 running lane 的 STATUS.md mtime；
+  会话活跃但 STATUS 超过停滞阈值未推进的 lane 会收到一次 `progressStalled` 提醒（双语），
+  识别攒批不推进的 worker。
+
+### 新增
+
+- **`conflict` lane 状态 + 未解决 merge 冲突自动暂停（B3#3）** —— merger agent 无法解决冲突
+  （或无 merger 可用）时，lane 进入新的 `conflict` 态（现场完整保留：lane worktree、分支、
+  orch 冲突状态），批次在**波次边界自动暂停**而非静默继续。supervisor 经 wave-complete 事件
+  （带 `conflict` 计数）唤醒，可手工修复 merge 后 `resume`，或决定重跑该 lane——不再有人工介入
+  与后台 merger/重试的竞态（双通知的根因）。
+- merger 任务书显式禁止再次执行 `git merge <laneBranch>`、禁止 abort 在途 merge（B3#2）——
+  agent 只基于保留的冲突现场工作。
+
+### 修复
+
+- `estimateEta`、supervisor 卡住检测、活跃 lane 列表、dashboard 适配器均计入 `conflict` 态
+  （视为未完成而非已完成）。
+
+## [0.2.18] - 2026-08-15
+
+LICENSE 改为标准 MIT 模板（GitHub 识别从 NOASSERTION/Other 恢复为 MIT）；package.json 补
+homepage / repository / bugs 字段（npm 页面展示）。
+
+## [0.2.17] - 2026-08-15
+
+移除已修复的 bug 交接文档；CHANGELOG 引用同步。
+
 ## [0.2.16] - 2026-08-15
 
 ### 修复
@@ -159,6 +195,9 @@
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
+[0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18
+[0.2.17]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14

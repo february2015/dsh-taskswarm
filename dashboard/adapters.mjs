@@ -62,6 +62,7 @@ const LANE_PHASE_TO_TASK_STATUS = {
   pending: 'pending',
   running: 'running',
   review: 'review',
+  conflict: 'conflict',
   merged: 'succeeded',
   failed: 'failed',
   skipped: 'skipped',

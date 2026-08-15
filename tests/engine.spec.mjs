@@ -284,3 +284,63 @@ test('abort then immediate start: old batch file is never re-written, new batch 
 
   rmSync(repo, { recursive: true, force: true })
 })
+
+/** Fake host whose worker conflicts on shared.txt and whose merger FAILS
+ *  to resolve → lane must land in `conflict` and the batch auto-pauses (B3#3). */
+class UnresolvedMergerHost {
+  constructor() { this.kind = 'fake' }
+
+  async spawn(spec) {
+    writeFileSync(join(spec.worktree, 'shared.txt'), `${spec.task.id} line\n`, 'utf-8')
+    checkpointCommit(spec.worktree, `feat(${spec.task.id}): shared line`)
+    markTaskDone(spec.task.folder)
+    return { exitCode: 0, text: `${spec.task.id} complete` }
+  }
+
+  async spawnMerger() {
+    // The LLM merge agent could not resolve the conflict.
+    return { status: 'CONFLICT_UNRESOLVED', summary: 'could not reconcile both implementations' }
+  }
+}
+
+test('unresolved merge conflict lands the lane in conflict and pauses the batch (B3#3)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'H-001-hotel'), 'H-001', 'Hotel', [])
+  writeTask(join(tasksRoot, 'I-002-india'), 'I-002', 'India', [])
+  const stateRoot = join(repo, '.taskswarm')
+  const host = new UnresolvedMergerHost()
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+
+  engine.run('all')
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  // The batch pauses at a wave boundary after the conflict; it never completes on its own.
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.ok(state, 'batch state exists')
+  assert.equal(state.phase, 'paused', `expected paused after conflict, got ${state.phase}`)
+
+  // The conflicting lane is marked conflict (not failed silently).
+  const conflictLanes = state.lanes.filter((l) => l.phase === 'conflict')
+  assert.ok(conflictLanes.length >= 1, `expected >=1 conflict lane, got ${state.lanes.map((l) => `${l.taskId}:${l.phase}`).join(',')}`)
+
+  // The scene is preserved: lane branch still exists for inspection.
+  const branchOk = runGit(['rev-parse', '--verify', 'refs/heads/taskswarm/H-001'], repo)
+  assert.ok(branchOk.ok || runGit(['rev-parse', '--verify', 'refs/heads/taskswarm/I-002'], repo).ok,
+    'at least one conflicting lane branch is preserved')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('worker mission enforces incremental advance rules (B2)', async () => {
+  const { buildWorkerMission } = await import('../lib/worker/lane-tools.js')
+  const mission = buildWorkerMission('/tmp/tasks/T-1', '/tmp/wt', 1, 'T-1')
+  assert.match(mission, /advance.*IMMEDIATELY|IMMEDIATELY.*advance/i, 'mission demands immediate advance')
+  assert.match(mission, /Never accumulate work/i, 'mission bans batching checkboxes')
+  assert.match(mission, /Do NOT edit STATUS\.md by hand/i, 'mission bans hand-editing STATUS.md')
+  assert.match(mission, /Only call `done` when ALL Completion Criteria/i, 'mission gates done on completion criteria')
+})

@@ -45,7 +45,7 @@ import { writeSetting, removeSetting, repoConfigPath } from './settings.ts'
 export function estimateEta(state: BatchState, locale: Locale): string {
   const m = messages(locale)
   const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped')
-  const remaining = state.lanes.filter((l) => l.phase === 'pending' || l.phase === 'running' || l.phase === 'review')
+  const remaining = state.lanes.filter((l) => l.phase === 'pending' || l.phase === 'running' || l.phase === 'review' || l.phase === 'conflict')
   if (remaining.length === 0) return m.etaDone
   const durations = done
     .map((l) => (l.endedAt && l.startedAt ? Date.parse(l.endedAt) - Date.parse(l.startedAt) : NaN))
@@ -339,7 +339,7 @@ export function currentWaveIndex(wavePlan: string[][], lanes: LaneState[]): numb
   for (let i = 0; i < wavePlan.length; i++) {
     if (wavePlan[i].some((tid) => {
       const l = byTask.get(tid)
-      return !!l && (l.phase === 'running' || l.phase === 'review')
+      return !!l && (l.phase === 'running' || l.phase === 'review' || l.phase === 'conflict')
     })) return i
   }
   for (let i = 0; i < wavePlan.length; i++) {
@@ -806,6 +806,10 @@ export function startPeriodicSupervision(
   let lastChangeAt = 0
   let lastReportAt = initialMinutes > 0 ? Date.now() : 0
   let stalledWarned = false
+  /** B2：progress-stall 检测——taskId → 上次 STATUS.md mtime（advance 会更新它）。
+   *  会话活跃但 STATUS 长时间不动 → worker 可能在攒批，进度显示滞后。 */
+  const statusMtimes = new Map<string, number>()
+  const progressStalledWarned = new Set<string>()
   /** 本批次是否已通知过 dashboard 链接（自动拉起成功时只通知一次）。 */
   let dashboardNotifiedBatch: string | null = null
 
@@ -839,7 +843,7 @@ export function startPeriodicSupervision(
     } else if (!stalledWarned && now - lastChangeAt >= stalledThresholdMs) {
       // 卡住检测（默认开启）：lane 阶段不变 + worker 会话日志也超时无更新才算真卡住。
       // 会话仍在写说明 worker 在干活（写大段代码时 lane 阶段不变），不误报。
-      const runningLanes = state.lanes.filter((l) => l.phase === 'running' || l.phase === 'review')
+      const runningLanes = state.lanes.filter((l) => l.phase === 'running' || l.phase === 'review' || l.phase === 'conflict')
       const activities = runningLanes.map((l) => (l.worktree ? latestSessionActivity(l.worktree) : 0))
       const anyFound = activities.some((m) => m > 0)
       const allStale = activities.length > 0 && activities.every((m) => m > 0 && now - m >= stalledThresholdMs)
@@ -851,6 +855,43 @@ export function startPeriodicSupervision(
       } else if (anyFound) {
         // 会话仍活跃：worker 在干活，重置无变化计时，避免每轮重复评估。
         lastChangeAt = now
+      }
+    }
+    // B2 progress-stall 检测：running lane 会话活跃（在写代码），但 STATUS.md 长时间
+    // 无 advance（mtime 不动）→ worker 可能在攒批。只提醒一次，不重复刷。
+    if (now - lastChangeAt < stalledThresholdMs || stalledWarned) {
+      // 仅在全批无变化计时未触发真卡住时才评估（避免与 stalled 重复打扰）
+      const tasks = scanTasks(state.tasksRoot, true)
+      for (const lane of state.lanes) {
+        if (lane.phase !== 'running' || !lane.worktree) continue
+        const packet = tasks.find((t) => t.task.id === lane.taskId)
+        if (!packet) continue
+        const statusPath = join(packet.task.folder, 'STATUS.md')
+        let mtime = 0
+        try {
+          mtime = statSync(statusPath).mtimeMs
+        } catch {
+          continue
+        }
+        const last = statusMtimes.get(lane.taskId) ?? 0
+        if (last === 0) {
+          statusMtimes.set(lane.taskId, mtime)
+          continue
+        }
+        if (mtime !== last) {
+          statusMtimes.set(lane.taskId, mtime)
+          progressStalledWarned.delete(lane.taskId)
+          continue
+        }
+        // STATUS 未变：查会话是否活跃——活跃才提示攒批（不活跃由上面 stalled 管）。
+        const activity = lane.worktree ? latestSessionActivity(lane.worktree) : 0
+        if (activity > 0 && now - activity < stalledThresholdMs && !progressStalledWarned.has(lane.taskId)) {
+          const staleFor = Math.round((now - mtime) / 60_000)
+          if (staleFor >= Math.round(stalledThresholdMs / 60_000)) {
+            progressStalledWarned.add(lane.taskId)
+            wake(`${m.progressStalled(lane.lane, lane.taskId, staleFor)}`)
+          }
+        }
       }
     }
     // 波次执行期间自动维持 dashboard：未运行则拉起，成功拉起后通知一次链接

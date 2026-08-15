@@ -45,6 +45,8 @@ export interface TaskSwarmEvent {
   /** Present on wave/batch events. */
   merged?: number
   failed?: number
+  /** Present on wave events with unresolved merge conflicts (B3#3). */
+  conflict?: number
   total?: number
 }
 
@@ -252,6 +254,7 @@ export class TaskSwarmEngine {
       }
       writeBatchState(state)
       // Wave boundary report (supervisor wakes on wave-complete, not lane-done).
+      const conflicted = lanes.filter((l) => l.phase === 'conflict').length
       this.emit({
         type: 'wave-complete',
         batchId,
@@ -259,8 +262,18 @@ export class TaskSwarmEngine {
         totalWaves: waves.waves.length,
         merged: lanes.filter((l) => l.phase === 'merged').length,
         failed: lanes.filter((l) => l.phase === 'failed').length,
+        conflict: conflicted,
         total: lanes.length,
       })
+      // B3#3：本波有 merge 冲突未解决 → 自动暂停，等 supervisor 处置（人工修复后 resume，
+      // 或决定重跑）。避免批次带着冲突 lane 继续跑、supervisor 手工介入与后台重试竞态。
+      if (conflicted > 0 && !ctx.aborted) {
+        ctx.paused = true
+        state.phase = 'paused'
+        writeBatchState(state)
+        // 波次完成后立即退出执行循环（下一波由 resume 重新调度）。
+        return
+      }
     }
 
     state.phase = ctx.aborted ? 'aborted' : 'complete'
@@ -420,21 +433,23 @@ export class TaskSwarmEngine {
             laneLog(lane, `merge resolved by merger agent (${mr.status}): ${mr.summary.slice(0, 160)}`)
             return { ...first, ok: true }
           }
-          lane.phase = 'failed'
-          lane.error = `merge failed: ${first.stderr.slice(0, 200)}; merger agent: ${mr.summary.slice(0, 200)}`
+          // B3#3：merge 冲突且 merger 未解决 → conflict 态（待 supervisor 处置），
+          // 不再直接 failed 静默收场：现场保留，批次将暂停等待处置（见 execute 波次边界）。
+          lane.phase = 'conflict'
+          lane.error = `merge conflict unresolved: ${first.stderr.slice(0, 150)}; merger agent: ${mr.summary.slice(0, 150)}`
           return first
         } catch (e) {
-          lane.phase = 'failed'
+          lane.phase = 'conflict'
           lane.error = `merge failed: ${first.stderr.slice(0, 200)}; merger agent error: ${e instanceof Error ? e.message : String(e)}`
           return first
         }
       })
       if (merged.ok) {
         lane.phase = 'merged'
-      } else if (lane.phase !== 'failed') {
-        // 兜底：merger 不可用且 merge 失败（merger 分支内部已置 failed 的不再覆盖）。
-        lane.phase = 'failed'
-        lane.error = `merge failed: ${merged.stderr.slice(0, 200)}`
+      } else if (lane.phase !== 'failed' && lane.phase !== 'conflict') {
+        // 兜底：merger 不可用且 merge 失败（merger 分支内部已置 failed/conflict 的不再覆盖）。
+        lane.phase = 'conflict'
+        lane.error = `merge conflict unresolved (no merger agent): ${merged.stderr.slice(0, 200)}`
       }
     }
     lane.endedAt = new Date().toISOString()

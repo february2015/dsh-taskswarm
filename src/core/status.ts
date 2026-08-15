@@ -8,7 +8,7 @@
 import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs'
 import { join } from 'node:path'
 
-export type LanePhase = 'pending' | 'running' | 'review' | 'merged' | 'failed' | 'skipped'
+export type LanePhase = 'pending' | 'running' | 'review' | 'conflict' | 'merged' | 'failed' | 'skipped'
 export type BatchPhase = 'planning' | 'running' | 'paused' | 'aborted' | 'complete'
 
 export interface LaneState {

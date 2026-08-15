@@ -34,6 +34,8 @@ export interface SupervisorMessages {
   etaLabel: string
   noBatchState: string
   stalled(id: string, minutes: number): string
+  /** 会话活跃但 STATUS 长时间无 advance：worker 可能在攒批，进度显示滞后（B2）。 */
+  progressStalled(lane: number, taskId: string, minutes: number): string
   periodicReport(minutes: number): string
   reportIntervalOn(minutes: number): string
   reportIntervalOff: string
@@ -69,6 +71,9 @@ const zhCN: SupervisorMessages = {
   stalled: (id, minutes) =>
     `[TaskSwarm supervisor] ⏱️ 疑似卡住：批次 ${id} 已约 ${minutes} 分钟无任何 lane 变化，且 worker 会话日志同样超时。` +
     '请用 tswarm_supervisor_status / 只读工具查证 lane 日志，判断是继续等待、pause 还是 abort。',
+  progressStalled: (lane, taskId, minutes) =>
+    `[TaskSwarm supervisor] 🐢 lane ${lane} ${taskId} 会话活跃但 STATUS.md 已约 ${minutes} 分钟未推进（无 advance）。` +
+    'worker 可能在攒批——请提醒它每完成一步就 task_runner advance（进度显示与崩溃恢复依赖增量检查点）。',
   periodicReport: (minutes) => `[TaskSwarm supervisor] ⏱️ 定时汇报（每 ${minutes} 分钟）：`,
   reportIntervalOn: (minutes) => `定时进度汇报已开启：每 ${minutes} 分钟汇报一次。`,
   reportIntervalOff: '定时进度汇报已关闭。',
@@ -101,6 +106,9 @@ const en: SupervisorMessages = {
   stalled: (id, minutes) =>
     `[TaskSwarm supervisor] ⏱️ Possibly stalled: batch ${id} has seen no lane changes for ~${minutes} minutes and worker session logs are stale too. ` +
     'Inspect lane logs with tswarm_supervisor_status / read-only tools, then decide: keep waiting, pause, or abort.',
+  progressStalled: (lane, taskId, minutes) =>
+    `[TaskSwarm supervisor] 🐢 lane ${lane} ${taskId} session is active but STATUS.md has not advanced for ~${minutes} minutes (no task_runner advance). ` +
+    'The worker may be batching — remind it to `advance` after EACH completed checkbox (progress display and crash recovery depend on incremental checkpoints).',
   periodicReport: (minutes) => `[TaskSwarm supervisor] ⏱️ Periodic report (every ${minutes} min):`,
   reportIntervalOn: (minutes) => `Periodic progress reports enabled: every ${minutes} minutes.`,
   reportIntervalOff: 'Periodic progress reports disabled.',

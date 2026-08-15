@@ -5,6 +5,45 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.19] - 2026-08-15
+
+### Changed
+
+- **Worker mission now enforces incremental `advance` (B2)** — the mission text gained hard rules:
+  `advance` immediately after EACH completed checkbox, never batch checkboxes to the end, `done`
+  only when ALL completion criteria are met, and never hand-edit STATUS.md. Fixes progress display
+  lagging at low percentages then jumping 0→100%, and crash recovery depending on the last commit.
+- **Progress-stall supervision (B2)** — the periodic supervisor now tracks each running lane's
+  STATUS.md mtime; a lane whose session is active but whose STATUS has not advanced for the stall
+  threshold gets a one-time `progressStalled` reminder (bilingual), flagging workers that batch
+  their checkpoints.
+
+### Added
+
+- **`conflict` lane phase + auto-pause on unresolved merge conflicts (B3#3)** — when the merger
+  agent cannot resolve a merge conflict (or no merger is available), the lane lands in a new
+  `conflict` phase (scene fully preserved: lane worktree, branch, orch conflict state) and the
+  batch **auto-pauses at the wave boundary** instead of silently continuing. The supervisor is
+  woken via the wave-complete event (with `conflict` count) and can fix the merge manually then
+  `resume`, or decide to rerun the lane — no more racing between manual intervention and a
+  background merger/retry (the double-notification root cause).
+- Merger mission now explicitly forbids re-running `git merge <laneBranch>` and forbids aborting
+  the in-progress merge (B3#2) — the agent works only on the preserved conflict scene.
+
+### Fixed
+
+- `estimateEta`, supervisor stall detection, active-lane listing, and the dashboard adapter now
+  account for the `conflict` phase (it counts as remaining, not done).
+
+## [0.2.18] - 2026-08-15
+
+Standard MIT LICENSE template (GitHub now detects `MIT` instead of `NOASSERTION/Other`); added
+`homepage` / `repository` / `bugs` to package.json for the npm page.
+
+## [0.2.17] - 2026-08-15
+
+Removed the resolved bug-handoff document; changelog references updated.
+
 ## [0.2.16] - 2026-08-15
 
 ### Fixed
@@ -185,6 +224,9 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.19]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.18...v0.2.19
+[0.2.18]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.17...v0.2.18
+[0.2.17]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.16...v0.2.17
 [0.2.16]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.15...v0.2.16
 [0.2.15]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.14...v0.2.15
 [0.2.14]: https://github.com/february2015/dsh-taskswarm/releases/tag/v0.2.14

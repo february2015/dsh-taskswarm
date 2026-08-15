@@ -38,7 +38,11 @@ engine's in-memory state is cleared, leaving only the disk state — so all reco
 ```
 
 **Batch phase**: `planning → running → paused → aborted | complete`
-**Lane phase**: `pending → running → review (REVISE) → merged | failed` (also `skipped`)
+**Lane phase**: `pending → running → review (REVISE) → merged | failed` (also `skipped`, `conflict`)
+`conflict` (since 2026-08-15): a merge conflict that the LLM merger agent could not resolve puts the
+lane in this phase; the batch **auto-pauses at the wave boundary** (phase=paused) awaiting the
+supervisor — fix the merge manually in the `_orch` worktree then `resume`, or decide to rerun the
+lane (see §7.1). The scene (lane worktree / branch / orch conflict state) is fully preserved.
 
 **git branch conventions**:
 

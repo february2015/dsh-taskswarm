@@ -42,6 +42,14 @@ export function buildWorkerMission(taskDir: string, worktree: string, lane: numb
     'checkbox and checkpoint-commit, `done` when the completion criteria are met, `blocked` with a',
     'reason if you cannot proceed. Call review_step at step boundaries. Use notify_supervisor to',
     'report progress and escalate_to_supervisor for issues you cannot resolve.',
+    '',
+    'HARD RULES on progress reporting (non-negotiable):',
+    '- `advance` IMMEDIATELY after completing EACH checkbox — one `advance` per completed item, never batch them.',
+    '- NEVER accumulate work and check all boxes at the end: the progress display and crash recovery depend on',
+    '  incremental `advance` calls (each one checkpoint-commits your work, so a crash never loses progress).',
+    '- If a step has several checkboxes, call `advance` after each one as soon as it is done, in order.',
+    '- Only call `done` when ALL Completion Criteria in PROMPT.md are actually satisfied.',
+    '- Do NOT edit STATUS.md by hand — it is updated exclusively through task_runner `advance` / `done`.',
   ].join('\n')
 }
 

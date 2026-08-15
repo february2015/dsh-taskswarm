@@ -38,7 +38,10 @@ TaskSwarm 的**唯一权威状态**是磁盘上的 `.taskswarm/`，不是内存�
 ```
 
 **批次 phase**：`planning → running → paused → aborted | complete`
-**lane phase**：`pending → running → review（REVISE）→ merged | failed`（另有 `skipped`）
+**lane phase**：`pending → running → review（REVISE）→ merged | failed`（另有 `skipped`、`conflict`）
+`conflict`（2026-08-15 起）：merge 冲突且 LLM merger agent 无法解决时 lane 进入此态，批次在波次边界
+**自动暂停**（phase=paused）等 supervisor 处置——人工在 `_orch` worktree 修复 merge 后 `resume`，
+或决定重跑该 lane（见 §7.1）。现场（lane worktree / 分支 / orch 冲突状态）完整保留。
 
 **git 分支约定**：
 
