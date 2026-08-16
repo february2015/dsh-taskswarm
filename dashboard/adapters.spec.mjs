@@ -179,7 +179,9 @@ test('batch mapping: batchId/phase/waves/wavePlan/lanes align with contract', (t
   // wavePlan recomputed from tasks root (BETA depends on ALPHA → 2 waves),
   // taskIds line up with batch.lanes[].taskId.
   assert.deepEqual(batch.wavePlan, [['ALPHA-001'], ['BETA-002']])
-  // First wave with a non-pending lane is wave index 1 (ALPHA pending, BETA running).
+  // Current wave = the one with active lanes (BETA running → index 1), not the
+  // first non-pending wave (ALPHA is pending; a merged earlier wave must not
+  // pin the index to 0 — see deriveCurrentWaveIndex 2026-08-17 fix).
   assert.equal(batch.currentWaveIndex, 1)
 
   // Lanes: phase passthrough, laneSessionId derived from worktree dir name.
@@ -193,6 +195,70 @@ test('batch mapping: batchId/phase/waves/wavePlan/lanes align with contract', (t
   assert.equal(batch.lanes[1].laneNumber, 2)
   assert.equal(batch.lanes[1].laneSessionId, 'beta-002')
   assert.equal(batch.lanes[1].phase, 'running')
+})
+
+test('currentWaveIndex: earlier merged wave must not pin the progress bar to W1', (t) => {
+  // JM 场景：W1 已 merged（非 pending），W2 正在跑。旧逻辑"第一个非 pending 波"
+  // 会恒返回 0 → 进度条/波次徽标一直显示 W1 为 current，即使 W2 已在执行。
+  const root = tmp()
+  t.after(() => cleanup(root))
+
+  writeTask(
+    join(root, 'tasks', 'A-001-one'),
+    'A-001', 'First', [],
+    statusMd('A-001', 'First', '✅ Completed', 'Step 1', 1, ['x', 'x']),
+  )
+  writeTask(
+    join(root, 'tasks', 'B-002-two'),
+    'B-002', 'Second', ['A-001'],
+    statusMd('B-002', 'Second', '🟢 In Progress', 'Step 2', 1, ['x', ' ']),
+  )
+  writeTask(
+    join(root, 'tasks', 'C-003-three'),
+    'C-003', 'Third', ['B-002'],
+    statusMd('C-003', 'Third', '🔵 Ready for Execution', 'Not Started', 0, [' ']),
+  )
+  const state = makeBatchState(root)
+  state.id = 'b-jm-wave-advance'
+  state.waves = 3
+  state.lanes = [
+    { lane: 1, taskId: 'A-001', phase: 'merged', worktree: join(root, '.taskswarm', 'worktrees', 'a-001'), log: ['lane merged'] },
+    { lane: 2, taskId: 'B-002', phase: 'running', worktree: join(root, '.taskswarm', 'worktrees', 'b-002'), startedAt: '2026-08-13T10:01:00.000Z', log: ['starting B-002'] },
+    { lane: 3, taskId: 'C-003', phase: 'pending', log: [] },
+  ]
+  writeBatchState(root, state)
+
+  const batch = buildDashboardState({ stateRoot: join(root, '.taskswarm') }).batch
+  assert.deepEqual(batch.wavePlan, [['A-001'], ['B-002'], ['C-003']])
+  // 正在执行的波是 W2（index 1）——即使 W1 已 merged 也不能把 current 钉在 W1。
+  assert.equal(batch.currentWaveIndex, 1)
+})
+
+test('currentWaveIndex: all waves terminal falls back to the last wave', (t) => {
+  const root = tmp()
+  t.after(() => cleanup(root))
+
+  writeTask(
+    join(root, 'tasks', 'A-001-one'),
+    'A-001', 'First', [],
+    statusMd('A-001', 'First', '✅ Completed', 'Step 1', 1, ['x', 'x']),
+  )
+  writeTask(
+    join(root, 'tasks', 'B-002-two'),
+    'B-002', 'Second', ['A-001'],
+    statusMd('B-002', 'Second', '✅ Completed', 'Step 1', 1, ['x', 'x']),
+  )
+  const state = makeBatchState(root)
+  state.id = 'b-jm-wave-done'
+  state.waves = 2
+  state.lanes = [
+    { lane: 1, taskId: 'A-001', phase: 'merged', worktree: join(root, '.taskswarm', 'worktrees', 'a-001'), log: ['lane merged'] },
+    { lane: 2, taskId: 'B-002', phase: 'failed', worktree: join(root, '.taskswarm', 'worktrees', 'b-002'), exitCode: 1, log: ['lane failed'] },
+  ]
+  writeBatchState(root, state)
+
+  const batch = buildDashboardState({ stateRoot: join(root, '.taskswarm') }).batch
+  assert.equal(batch.currentWaveIndex, 1)
 })
 
 test('task mapping: statusData.progress from STATUS.md, title, done flag', (t) => {
@@ -447,7 +513,7 @@ test('latestBatch selection: lexically-last batch file wins when no batchId give
   assert.equal(explicit.batch.batchId, 'b-aaa')
 })
 
-test('buildStatusData shows "In Progress" when a running lane still says "Not Started" (B4)', () => {
+test('buildStatusData shows "In Progress" when a running lane still says "Not Started" (B4)', (t) => {
   const root = tmp()
   t.after(() => cleanup(root))
   const taskDir = join(root, 'tasks', 'B4-001-four')

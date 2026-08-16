@@ -315,19 +315,28 @@ export function buildStatusData(taskFolder, lanePhase) {
 }
 
 /**
- * First wave index that contains at least one non-pending lane. Matches the
- * upstream intent (`currentWaveIndex` marks the currently-executing wave).
- * All-pending (or empty) plans report wave 0.
+ * Current wave index. 2026-08-17 修复：与 supervisor 的 currentWaveIndex 对齐——
+ * 优先取含 running/review/conflict lane 的波（真正在执行的波），其次取第一个
+ * 含 pending lane 的波（波次边界/即将执行），全部终结时取最后一波。
+ * 旧逻辑"第一个含非 pending lane 的波"会让已完成的前置波（如 W1 的 merged lane）
+ * 永远抢占 currentWaveIndex=0 → 进度条卡在 W1，即使 W2 已在跑（JM 反馈）。
  */
 export function deriveCurrentWaveIndex(wavePlan, lanesByTaskId) {
   for (let i = 0; i < wavePlan.length; i++) {
-    const hasWork = wavePlan[i].some((tid) => {
+    const hasActive = wavePlan[i].some((tid) => {
       const lane = lanesByTaskId.get(tid)
-      return lane && lane.phase !== 'pending'
+      return lane && (lane.phase === 'running' || lane.phase === 'review' || lane.phase === 'conflict')
     })
-    if (hasWork) return i
+    if (hasActive) return i
   }
-  return 0
+  for (let i = 0; i < wavePlan.length; i++) {
+    const hasPending = wavePlan[i].some((tid) => {
+      const lane = lanesByTaskId.get(tid)
+      return lane && lane.phase === 'pending'
+    })
+    if (hasPending) return i
+  }
+  return Math.max(0, wavePlan.length - 1)
 }
 
 /**
