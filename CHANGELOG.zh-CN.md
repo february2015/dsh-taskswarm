@@ -5,6 +5,26 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.25] - 2026-08-16
+
+### 变更
+
+- **supervisor 消息改为带类型标签的极简英文** —— 每条通知以方括号标签开头，一眼看出消息类型；
+  定时汇报的标签含间隔：
+  - `[TS report · every 5m]` —— 定时汇报（标签带间隔）
+  - `[TS wave 1/2 done] 2 merged · 1 failed` —— 波次完成
+  - `[TS lane failed] L2 JM-403` —— lane 失败
+  - `[TS batch complete] 3/4 merged · 1 failed` —— 批次完成
+  - `[TS paused]` / `[TS stalled]` / `[TS 🐢 progress]` / `[TS aborted]` —— 其余事件
+- **状态正文简化** —— `compactBatchStatus` 现在渲染为：
+  ```
+  b-msvinu6n — W1/2 · 0/4 done
+    L1 [run] JM-402 · steps 5/8 · 81
+    L2 [run] JM-403 · steps 1/11 · 117
+  ```
+  （短批次 id、`L<n>` 代替 `lane <n>`、`run` 代替 `running`、尾部 `· N` 为累计步数；
+  英文模板同步精简）。
+
 ## [0.2.24] - 2026-08-16
 
 ### 新增
@@ -284,6 +304,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22

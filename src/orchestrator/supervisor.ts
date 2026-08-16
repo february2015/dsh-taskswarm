@@ -395,10 +395,12 @@ export function laneProgress(lane: LaneState, taskFolders: Map<string, string>):
  */
 export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'): string {
   const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped').length
-  const lines = [`Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} lanes done)`]
+  // 短 id：去掉 'b-' 前缀和随机后缀（e2f829），保留 batch 序号部分。
+  const shortId = state.id.replace(/^b-/, '').split('-')[0] ?? state.id
+  const lines = [`b-${shortId} — W?/? · ${done}/${state.lanes.length} done`]
   const wavePlan = recomputeWavePlan(state)
   const waveIdx = currentWaveIndex(wavePlan, state.lanes)
-  lines.push(`  ${messages(locale).waveHeader(waveIdx + 1, wavePlan.length)}`)
+  lines[0] = lines[0].replace('W?/?', `W${waveIdx + 1}/${wavePlan.length}`)
   const current = new Set(wavePlan[waveIdx] ?? [])
   const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const l of state.lanes) {
@@ -406,9 +408,10 @@ export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'):
     const progress = laneProgress(l, taskFolders)
     const steps = l.worktree ? workerStepCountFromSessions(l.worktree) : 0
     const bits = [progress && `steps ${progress}`]
-    if (steps > 0) bits.push(`${steps} steps executed`)
+    if (steps > 0) bits.push(String(steps))
     const tail = bits.filter(Boolean).join(' · ')
-    lines.push(`  lane ${l.lane} [${l.phase}] ${l.taskId}${tail ? ` ${tail}` : ''}`)
+    const phase = l.phase === 'running' ? 'run' : l.phase
+    lines.push(`  L${l.lane} [${phase}] ${l.taskId}${tail ? ` · ${tail}` : ''}`)
   }
   return lines.join('\n')
 }
@@ -983,7 +986,9 @@ export function startPeriodicSupervision(
     // 定时汇报（默认关闭；operator 要求后按间隔唤醒）
     if (reportIntervalMs > 0 && now - lastReportAt >= reportIntervalMs) {
       lastReportAt = now
-      wake(`${m.periodicReport(Math.round(reportIntervalMs / 60_000))}\n${compactBatchStatus(state, refLocale())}\n\n${m.etaLabel}${estimateEta(state, refLocale())}\n${m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))}`)
+      const mins = Math.round(reportIntervalMs / 60_000)
+      const eta = estimateEta(state, refLocale())
+      wake(`[TS report · every ${mins}m]\n${compactBatchStatus(state, refLocale())}${eta && eta !== m.etaLabel ? `\nETA ${eta.replace(/^~/, '').trim()}` : ''}\n💾 ${formatBytes(sessionsBytes(state.lanes))}`)
     }
   }
 

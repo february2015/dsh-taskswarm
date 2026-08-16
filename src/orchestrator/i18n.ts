@@ -95,38 +95,36 @@ const zhCN: SupervisorMessages = {
 }
 
 const en: SupervisorMessages = {
-  batchStarted: (id, total) => `[TaskSwarm supervisor] Batch ${id} started (${total} tasks)`,
-  laneFailed: (lane, taskId, error) => `[TaskSwarm supervisor] ⚠️ lane ${lane} ${taskId} failed${error ? `: ${error}` : ''}`,
-  laneRevise: (lane, taskId) => `[TaskSwarm supervisor] 🟡 lane ${lane} ${taskId} awaiting revision (reviewer REVISE)`,
-  waveComplete: (wave, total, merged, failed) => `[TaskSwarm supervisor] 🌊 Wave ${wave}/${total} complete: ${merged} merged / ${failed} failed`,
-  batchComplete: (id, merged, total, failed) => `[TaskSwarm supervisor] ✅ Batch ${id} complete: ${merged}/${total} merged, ${failed} failed`,
-  batchAborted: (id) => `[TaskSwarm supervisor] ⛔ Batch ${id} aborted`,
-  etaLabel: 'ETA: ',
+  batchStarted: (id, total) => `[TS started] ${id} · ${total} tasks`,
+  laneFailed: (lane, taskId, error) => `[TS lane failed] L${lane} ${taskId}${error ? ` · ${error.slice(0, 80)}` : ''}`,
+  laneRevise: (lane, taskId) => `[TS revise] L${lane} ${taskId} (reviewer REVISE)`,
+  waveComplete: (wave, total, merged, failed) => `[TS wave ${wave}/${total} done] ${merged} merged · ${failed} failed`,
+  batchComplete: (id, merged, total, failed) => `[TS batch complete] ${merged}/${total} merged · ${failed} failed`,
+  batchAborted: (id) => `[TS aborted] ${id}`,
+  etaLabel: 'ETA ',
   noBatchState: '(no batch state)',
   stalled: (id, minutes) =>
-    `[TaskSwarm supervisor] ⏱️ Possibly stalled: batch ${id} has seen no lane changes for ~${minutes} minutes and worker session logs are stale too. ` +
-    'Inspect lane logs with tswarm_supervisor_status / read-only tools, then decide: keep waiting, pause, or abort.',
+    `[TS stalled] ${id} no lane changes ~${minutes}m and session logs stale. Inspect with tswarm_supervisor_status, then wait / pause / abort.`,
   progressStalled: (lane, taskId, minutes) =>
-    `[TaskSwarm supervisor] 🐢 lane ${lane} ${taskId} session is active but STATUS.md has not advanced for ~${minutes} minutes (no task_runner advance). ` +
-    'The worker may be batching — remind it to `advance` after EACH completed checkbox (progress display and crash recovery depend on incremental checkpoints).',
-  periodicReport: (minutes) => `[TaskSwarm supervisor] ⏱️ Periodic report (every ${minutes} min):`,
-  reportIntervalOn: (minutes) => `Periodic progress reports enabled: every ${minutes} minutes.`,
-  reportIntervalOff: 'Periodic progress reports disabled.',
-  invalidInterval: (minutes) => `Invalid interval: ${minutes} minutes (must be an integer ≥ 0; 0 = off)`,
-  waveHeader: (current, total) => `Current Wave: ${current}/${total}`,
-  etaDone: 'Complete',
-  etaEstimating: 'Estimating (no completed lanes yet)',
-  etaBaseOne: (seconds) => `1 lane done in ${seconds}s`,
-  etaBaseMany: (count, seconds) => `${count} lanes done, avg ${seconds}s`,
-  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes} min (${base} × ${remaining} remaining lanes ÷ parallelism ${parallel})`,
+    `[TS 🐢 progress] L${lane} ${taskId} active but no advance ~${minutes}m — worker may be batching; remind it to \`advance\` after each checkbox.`,
+  periodicReport: (minutes) => `[TS report · every ${minutes}m]`,
+  reportIntervalOn: (minutes) => `Periodic reports on: every ${minutes} min.`,
+  reportIntervalOff: 'Periodic reports off.',
+  invalidInterval: (minutes) => `Invalid interval: ${minutes} min (integer ≥ 0; 0 = off)`,
+  waveHeader: (current, total) => `W${current}/${total}`,
+  etaDone: 'done',
+  etaEstimating: 'estimating',
+  etaBaseOne: (seconds) => `1 lane ${seconds}s`,
+  etaBaseMany: (count, seconds) => `${count} lanes avg ${seconds}s`,
+  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes}m (${base} × ${remaining} lanes ÷ ${parallel})`,
   localeCurrent: (locale) =>
     `Current supervisor language: ${locale === 'en' ? 'English (en)' : 'Chinese (zh-CN)'} (say "use English"/"use Chinese" to switch; "auto" re-detects from your session)`,
   localeSwitchedTo: (locale, configPath) =>
     `Switched to ${locale === 'en' ? 'English' : 'Chinese'} — notifications and the supervisor prompt take effect immediately, and the choice is saved to ${configPath}.`,
-  dashboardUrl: (url) => `📊 Dashboard started: ${url} (open it in your browser for live progress)`,
-  sessionsUsage: (bytes) => `💾 Worker session disk usage (this batch): ${bytes}`,
+  dashboardUrl: (url) => `📊 Dashboard: ${url}`,
+  sessionsUsage: (bytes) => `💾 ${bytes}`,
   cleanupOffer: (bytes) =>
-    `✅ All tasks merged successfully. Clean up this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
+    `✅ All merged. Delete this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
 }
 
 const dictionaries: Record<Locale, SupervisorMessages> = { 'zh-CN': zhCN, en }

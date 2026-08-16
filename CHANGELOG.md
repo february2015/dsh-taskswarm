@@ -5,6 +5,26 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.25] - 2026-08-16
+
+### Changed
+
+- **Supervisor messages are now terse English with type tags** — every notification starts with a
+  bracket label so you always know what kind it is and (for periodic reports) the interval:
+  - `[TS report · every 5m]` — periodic report (label includes the interval)
+  - `[TS wave 1/2 done] 2 merged · 1 failed` — wave completion
+  - `[TS lane failed] L2 JM-403` — lane failure
+  - `[TS batch complete] 3/4 merged · 1 failed` — batch completion
+  - `[TS paused]`, `[TS stalled]`, `[TS 🐢 progress]`, `[TS aborted]` — the rest
+- **Status body simplified** — `compactBatchStatus` now renders:
+  ```
+  b-msvinu6n — W1/2 · 0/4 done
+    L1 [run] JM-402 · steps 5/8 · 81
+    L2 [run] JM-403 · steps 1/11 · 117
+  ```
+  (short batch id, `L<n>` instead of `lane <n>`, `run` instead of `running`, trailing `· N` =
+  steps executed; the English locale templates were shortened accordingly).
+
 ## [0.2.24] - 2026-08-16
 
 ### Added
@@ -327,6 +347,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
