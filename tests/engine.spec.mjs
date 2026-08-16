@@ -467,3 +467,87 @@ test('stopLane kills one lane and pauses the batch after the wave', async () => 
 
   rmSync(repo, { recursive: true, force: true })
 })
+
+/** Host that records the model each spawn used. */
+class ModelRecordingHost {
+  constructor() { this.kind = 'fake'; this.spawnedModels = [] }
+  async spawn(spec) {
+    this.spawnedModels.push({ taskId: spec.task.id, model: spec.model })
+    writeFileSync(join(spec.worktree, `${spec.task.id}.txt`), `${spec.task.id} done\n`, 'utf-8')
+    checkpointCommit(spec.worktree, `feat(${spec.task.id})`)
+    markTaskDone(spec.task.folder)
+    return { exitCode: 0, text: `${spec.task.id} complete` }
+  }
+  abort() {}
+}
+
+test('switchLaneModel: records override, stops the lane, and reruns it with the new model (one-command SOP)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'P-001-papa'), 'P-001', 'Papa', [])
+  writeTask(join(tasksRoot, 'Q-002-queen'), 'Q-002', 'Queen', [])
+  const stateRoot = join(repo, '.taskswarm')
+  const host = new ModelRecordingHost()
+  const engine = new TaskSwarmEngine({
+    repoRoot: repo, tasksRoot, stateRoot,
+    host, workerModel: 'deepseek-v4-flash',
+  })
+
+  engine.run('all')
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.equal(state.phase, 'complete', `batch completes, got ${state.phase}`)
+  // Both lanes spawned with the default model first.
+  assert.ok(host.spawnedModels.every((s) => s.model === 'deepseek-v4-flash'), 'initial spawns use workerModel')
+
+  // Switch Q-002 to a different model — the batch is complete, so switchLaneModel
+  // should refuse or no-op gracefully (no running batch). Assert the guard.
+  const after = await engine.switchLaneModel('Q-002', 'deepseek-r1')
+  assert.equal(after.ok, false, 'no running batch → switch refused')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('switchLaneModel reruns a running lane with the new model from the next step', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'R-001-romeo'), 'R-001', 'Romeo', [])
+  writeTask(join(tasksRoot, 'S-002-sierra'), 'S-002', 'Sierra', [])
+  const stateRoot = join(repo, '.taskswarm')
+  // Slow host: lanes take 800ms, so switchLaneModel lands mid-run.
+  const host = new ModelRecordingHost()
+  const slowSpawn = host.spawn.bind(host)
+  host.spawn = async (spec) => {
+    await sleep(800)
+    return slowSpawn(spec)
+  }
+  const engine = new TaskSwarmEngine({
+    repoRoot: repo, tasksRoot, stateRoot,
+    host, workerModel: 'deepseek-v4-flash',
+  })
+
+  engine.run('all')
+  await sleep(250) // lanes started, still running (800ms)
+
+  // Switch S-002 to deepseek-r1 while it is running.
+  const result = await engine.switchLaneModel('S-002', 'deepseek-r1')
+  assert.equal(result.ok, true, `switch succeeds: ${result.message}`)
+
+  // Poll until the rerun with the new model actually spawns (async rerun).
+  const deadline = Date.now() + 15_000
+  let sSpawns = []
+  while (Date.now() < deadline) {
+    sSpawns = host.spawnedModels.filter((s) => s.taskId === 'S-002')
+    if (sSpawns.some((s) => s.model === 'deepseek-r1')) break
+    await sleep(100)
+  }
+  assert.ok(sSpawns.length >= 2, `S-002 spawned at least twice (initial + rerun), got ${sSpawns.length}`)
+  assert.ok(sSpawns.some((s) => s.model === 'deepseek-r1'), 'rerun used the new model')
+
+  rmSync(repo, { recursive: true, force: true })
+})

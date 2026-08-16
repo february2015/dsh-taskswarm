@@ -131,6 +131,7 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 | `/tswarm-status`                 | 查看当前批次 / lane 进度                |
 | `/tswarm-pause` / `/tswarm-resume` | 当前波次结束后暂停 / 恢复。failed lane 也会在该波结束后自动暂停（`pauseOnLaneFailure`，默认开）——resume 时跳过该失败 lane；要重跑用 `/tswarm <taskId>` |
 | `/tswarm-stop-lane <taskId>`       | 立即停掉单个 lane（终止 worker、标记 failed、保留 worktree/检查点）；同波其他 lane 继续，该波结束后批次暂停等处置 |
+| `/tswarm-switch-model <taskId> <model>` | 一条命令更换单个 lane 的模型：停掉它、记录覆盖、自动从下一步重跑（检查点保留）。优先级：覆盖 > `workerModel` > 父会话默认 |
 | `/tswarm-abort`                  | 当前波次结束后中止（并终止运行中 lane）          |
 | `/tswarm-deps [scope]`           | 查看依赖图                           |
 | `/tswarm-sessions`               | 列出活跃 lane 及其 worktree           |

@@ -5,6 +5,21 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.29] - 2026-08-16
+
+### 新增
+
+- **`/tswarm-switch-model <taskId> <model>`**（别名 `/orch-switch-model`）—— 一条命令更换
+  指定 lane 的模型。内部固化三步 SOP：
+  1. 记录该 lane 的模型覆盖（下次 spawn worker 时生效）；
+  2. 停掉当前 worker（中断 + 保留 worktree/检查点）；
+  3. 自动重跑该 lane —— `createLaneWorktree` 附着旧分支、STATUS.md 携带步骤记忆，
+     新模型 worker 从**下一步**继续，不丢已完成工作。
+  同波其他 lane 不受影响，批次继续运行。每个 lane 的模型优先级：
+  `/tswarm-switch-model` 覆盖 > 插件 `workerModel` > 父会话默认模型。
+- 测试：switch 记录覆盖、停掉 lane、重跑用新模型（用记录模型的 host 验证）；
+  无运行批次时切换被干净拒绝。
+
 ## [0.2.28] - 2026-08-16
 
 ### 变更
@@ -339,6 +354,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26

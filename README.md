@@ -139,6 +139,7 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 | `/tswarm-status`                   | Show current batch / lane progress                     |
 | `/tswarm-pause` / `/tswarm-resume` | Pause after the current wave / resume. A failed lane also auto-pauses after the wave (`pauseOnLaneFailure`, on by default) — resume then skips the failed lane; rerun it with `/tswarm <taskId>` |
 | `/tswarm-stop-lane <taskId>`       | Stop one lane immediately (kill worker, mark failed, preserve worktree/checkpoints); sibling lanes continue, the batch pauses after the wave |
+| `/tswarm-switch-model <taskId> <model>` | Switch one lane to a different model: stop it, record the override, auto-rerun from the next step (checkpoints preserved). Override > `workerModel` > parent-session default |
 | `/tswarm-abort`                    | Abort after the current wave (kills running lanes)     |
 | `/tswarm-deps [scope]`             | Show the dependency graph                              |
 | `/tswarm-sessions`                 | List active lanes and their worktrees                  |

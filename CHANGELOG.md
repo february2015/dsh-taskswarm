@@ -5,6 +5,21 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.29] - 2026-08-16
+
+### Added
+
+- **`/tswarm-switch-model <taskId> <model>`** (alias `/orch-switch-model`) — switch one lane to a
+  different model with a single command. Internally it performs the three-step SOP:
+  1. record the per-lane model override (takes effect on the lane's next worker spawn);
+  2. stop the current worker (kill + preserve worktree/checkpoints);
+  3. auto-rerun the lane — `createLaneWorktree` attaches the old branch and STATUS.md carries the
+     step memory, so the new-model worker continues **from the next step**, losing nothing.
+  Sibling lanes are unaffected; the batch keeps running. Model priority per lane:
+  `/tswarm-switch-model` override > plugin `workerModel` > parent-session default.
+- Tests: switch records the override, stops the lane, and the rerun spawns with the new model
+  (verified by a model-recording host); switching with no running batch is refused cleanly.
+
 ## [0.2.28] - 2026-08-16
 
 ### Changed
@@ -388,6 +403,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26

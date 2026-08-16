@@ -467,6 +467,18 @@ export function apply(ctx: Context, config: Config): void {
     }),
   })
 
+  registerCommand(['tswarm-switch-model', 'orch-switch-model'], {
+    description: 'switch one lane to a different model: stop its worker, record the model override, and auto-rerun it from the next step (checkpoints preserved). Usage: /tswarm-switch-model <taskId> <model>',
+    handler: (invocation) => withEngine(invocation, async (ref) => {
+      const args = invocation.rawInput.trim().split(/\s+/)
+      const taskId = (args[0] ?? '').toUpperCase()
+      const model = args.slice(1).join(' ')
+      if (!taskId || !model) return err('Usage: /tswarm-switch-model <taskId> <model>')
+      const result = await ref.engine.switchLaneModel(taskId, model)
+      return result.ok ? ok(result.message) : err(result.message)
+    }),
+  })
+
   registerCommand(['tswarm-integrate', 'orch-integrate'], {
     description: 'merge the taskswarm/orch integration branch into the working branch',
     handler: (invocation) => withEngine(invocation, (ref) => {

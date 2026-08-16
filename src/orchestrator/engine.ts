@@ -103,6 +103,8 @@ export class TaskSwarmEngine {
   /** pauseOnLaneFailure 暂停的批次 id：resume 时应跳过 failed lane（丢弃），而非重跑。
    *  与"崩溃恢复"的 paused 批次区分——后者 failed lane 需重跑续接（KI-007）。 */
   private pausedOnFailureBatch: string | null = null
+  /** per-lane 模型覆盖：taskId → model（/tswarm-switch-model 设置；重跑该 lane 时生效）。 */
+  private readonly laneModelOverrides = new Map<string, string>()
   /**
    * Merge mutex：同一 wave 的多个 lane 并行完成，但 orch worktree 的
    * `git merge` 必须串行——并发 merge 会被 git 锁拒绝（stderr 为空，
@@ -410,7 +412,8 @@ export class TaskSwarmEngine {
       batchId,
       stateRoot: config.stateRoot,
       repoRoot: config.repoRoot,
-      model: config.workerModel,
+      // 2026-08-16：per-lane 模型覆盖（/tswarm-switch-model 设置）优先于全局 workerModel。
+      model: this.laneModelOverrides.get(task.id) ?? config.workerModel,
       reviewerModel: config.reviewerModel,
     }
 
@@ -724,6 +727,49 @@ export class TaskSwarmEngine {
     lane.endedAt = new Date().toISOString()
     writeBatchState(state!)
     return { ok: true, message: `lane ${lane.lane} (${taskId}) stopped; worktree/checkpoints preserved` }
+  }
+
+  /**
+   * 更换指定 lane 的模型（/tswarm-switch-model）——把三步固化为一个命令：
+   * ① 记录该 lane 的模型覆盖（下次 spawn worker 时用新模型）；
+   * ② 停掉当前 worker（stopLane：中断、保留 worktree/检查点）；
+   * ③ 自动重跑该 lane——createLaneWorktree 附着旧分支 + STATUS.md 步骤记忆，
+   *    新模型的 worker 从**下一步**继续，不丢已完成工作。
+   * 同波其他 lane 不受影响；批次继续运行。
+   * @returns { ok, message }
+   */
+  async switchLaneModel(taskId: string, model: string): Promise<{ ok: boolean; message: string }> {
+    const ctx = this.activeContext()
+    if (!ctx) return { ok: false, message: 'no running batch' }
+    if (!model.trim()) return { ok: false, message: 'model is required' }
+    // ① 记录覆盖
+    this.laneModelOverrides.set(taskId, model.trim())
+    // ② 停当前 worker（若在跑；已失败/pending 的 lane 直接重跑即可）
+    const stopped = this.stopLane(taskId)
+    if (!stopped.ok && !stopped.message.includes('not running')) {
+      this.laneModelOverrides.delete(taskId)
+      return stopped
+    }
+    // ③ 自动重跑该 lane（从检查点续）
+    const state = readBatchState(this.config.stateRoot, ctx.batchId)
+    const task = this.select(taskId).find((t) => t.task.id === taskId)?.task
+    if (!state || !task) {
+      this.laneModelOverrides.delete(taskId)
+      return { ok: false, message: `task ${taskId} not found for rerun` }
+    }
+    laneLog({ lane: 0, taskId, phase: 'running', log: [] }, `switching model → ${model.trim()}; rerunning lane`)
+    void (async () => {
+      try {
+        const rerun = await this.runLane(ctx, state, task)
+        const idx = state.lanes.findIndex((l) => l.taskId === taskId)
+        if (idx >= 0) state.lanes[idx] = rerun
+        writeBatchState(state)
+      } catch (e) {
+        const err = e instanceof Error ? e.message : String(e)
+        laneLog({ lane: 0, taskId, phase: 'failed', log: [] }, `rerun after model switch failed: ${err}`)
+      }
+    })()
+    return { ok: true, message: `lane ${taskId} will rerun with model ${model.trim()} from the next step (checkpoints preserved)` }
   }
 
   private activeContext(): RunContext | undefined {
