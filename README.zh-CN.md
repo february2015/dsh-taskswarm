@@ -1,8 +1,8 @@
 # TaskSwarm（蜂群）
 
-> ⚠️ **临时包名通告（2026-08-17 ~ 08-18）**：npm 包 `dsh-taskswarm` 因清理历史版本被整体删除，需要 24 小时冷却（npm 防抢注保护）。**8月17日、8月18日这两天请用临时包名安装**：
-> `dsh plugin add dsh-taskswarm2@0.2.38`（或 `npm i dsh-taskswarm2@0.2.38`）。
-> **8月19日起恢复标准包名** `dsh-taskswarm@0.2.38`（安装方式：`dsh plugin add dsh-taskswarm@0.2.38`），届时本通告移除。
+> ⚠️ **临时安装通告（2026-08-17 ~ 08-18）**：npm 包 `dsh-taskswarm` 因清理历史版本被整体删除，需要 24 小时冷却（npm 防抢注保护）。**8月17日、8月18日这两天请用 GitHub 安装**：
+> `dsh plugin add https://github.com/february2015/dsh-taskswarm.git`
+> **8月19日起恢复 npm 安装**：`dsh plugin add dsh-taskswarm`，届时本通告移除。
 
 **DeepSeek Harness 上的多智能体任务编排插件** —— 把一批任务按依赖排成波次，让多个 AI worker 在相互隔离的环境里并行执行，再自动评审、合并产出。
 
