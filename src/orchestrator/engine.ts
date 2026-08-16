@@ -130,6 +130,34 @@ export class TaskSwarmEngine {
     return latestBatch(this.config.stateRoot)
   }
 
+  /** 暴露当前仍在运行中的批次快照（供其它插件如 dsh-dingo 读取）。 */
+  activeBatches(): Array<{
+    batchId: string
+    phase: string
+    lanes: Array<{ lane: number; taskId: string; phase: string }>
+    ownerSessionId?: string
+  }> {
+    const result: Array<{
+      batchId: string
+      phase: string
+      lanes: Array<{ lane: number; taskId: string; phase: string }>
+      ownerSessionId?: string
+    }> = []
+    for (const [batchId, ctx] of this.active) {
+      if (ctx.aborted) continue
+      const state = readBatchState(this.config.stateRoot, batchId)
+      if (!state) continue
+      const owner = this.batchOwners.get(batchId) as { session?: { id?: string } } | undefined
+      result.push({
+        batchId,
+        phase: state.phase,
+        lanes: state.lanes.map((lane) => ({ lane: lane.lane, taskId: lane.taskId, phase: lane.phase })),
+        ownerSessionId: owner?.session?.id,
+      })
+    }
+    return result
+  }
+
   /** Discover tasks and compute the wave plan for a scope. */
   plan(scope: string): { waves: WavePlan; count: number } {
     const selected = this.select(scope)

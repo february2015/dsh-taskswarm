@@ -160,6 +160,30 @@ export function apply(ctx: Context, config: Config): void {
   const dashboards = new DashboardManager()
   const templatesDir = fileURLToPath(new URL('../../templates/tasks/', import.meta.url))
 
+  // 标准集成服务：其它插件（如 dsh-dingo）可通过 ctx.get('taskswarm') 读取活跃批次。
+  const taskswarmService = {
+    getSnapshot(): {
+      batches: Array<{
+        batchId: string
+        phase: string
+        lanes: Array<{ lane: number; taskId: string; phase: string }>
+        ownerSessionId?: string
+      }>
+    } {
+      const batches: Array<{
+        batchId: string
+        phase: string
+        lanes: Array<{ lane: number; taskId: string; phase: string }>
+        ownerSessionId?: string
+      }> = []
+      for (const ref of engines.values()) {
+        batches.push(...ref.engine.activeBatches())
+      }
+      return { batches }
+    },
+  }
+  ctx.provide('taskswarm', taskswarmService)
+
   // 进程关闭（Ctrl+C / 插件卸载）时，先优雅停止所有在跑 batch：abort 会 cancel
   // 活跃 lanes 并清理 worktree，避免 worker 在 agent 工厂卸载后仍在 spawn
   // （"no agent factory registered" 竞态）；同时回收 dashboard 子进程。
