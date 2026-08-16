@@ -1,5 +1,9 @@
 # TaskSwarm（蜂群）
 
+> ⚠️ **临时包名通告（2026-08-17 ~ 08-18）**：npm 包 `dsh-taskswarm` 因清理历史版本被整体删除，**24 小时内无法重新发布**（npm 防抢注保护）。此期间请用临时包名安装：
+> `dsh plugin add dsh-taskswarm2@0.2.38`（或 `npm i dsh-taskswarm2@0.2.38`）。
+> **24 小时后（约 08-18 15:25 北京时间）恢复标准包名** `dsh-taskswarm@0.2.38`，届时本通告移除。
+
 **Multi-agent task orchestration for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai).**
 
 TaskSwarm arranges a batch of tasks into dependency-ordered **waves**, runs multiple AI workers in **parallel lanes** isolated by git worktrees, then automatically reviews and merges their output.
