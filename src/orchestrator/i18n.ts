@@ -29,6 +29,8 @@ export interface SupervisorMessages {
   laneFailed(lane: number, taskId: string, error?: string): string
   laneRevise(lane: number, taskId: string): string
   waveComplete(wave: number, total: number, merged: number, failed: number): string
+  /** 最后一波完成时被暂停（无更多 pending 波，批次停在 paused 等用户处置）。 */
+  wavePaused(wave: number, total: number, merged: number, failed: number): string
   batchComplete(id: string, merged: number, total: number, failed: number): string
   batchAborted(id: string): string
   etaLabel: string
@@ -67,6 +69,7 @@ const zhCN: SupervisorMessages = {
   laneFailed: (lane, taskId, error) => `[TaskSwarm] ⚠️ lane ${lane} ${taskId} 失败${error ? `：${error.slice(0, 100)}` : ''}`,
   laneRevise: (lane, taskId) => `[TaskSwarm] 🟡 lane ${lane} ${taskId} 待修订（reviewer REVISE）`,
   waveComplete: (wave, total, merged, failed) => `[TaskSwarm] 🌊 波次 ${wave}/${total} 完成：${merged} 个成功合并，${failed} 个失败`,
+  wavePaused: (wave, total, merged, failed) => `[TaskSwarm] ⏸️ 已执行完波次 ${wave}/${total} 后暂停：${merged} 个成功合并，${failed} 个失败（等待处置）`,
   batchComplete: (id, merged, total, failed) => `[TaskSwarm] ✅ 批次完成：${merged}/${total} 成功合并，${failed} 个失败`,
   batchAborted: (id) => `[TaskSwarm] ⛔ 批次已中止：${id}`,
   etaLabel: '预计剩余：',
@@ -104,6 +107,7 @@ const en: SupervisorMessages = {
   laneFailed: (lane, taskId, error) => `[TaskSwarm] ⚠️ lane ${lane} ${taskId} failed${error ? `: ${error.slice(0, 100)}` : ''}`,
   laneRevise: (lane, taskId) => `[TaskSwarm] 🟡 lane ${lane} ${taskId} awaiting revision (reviewer REVISE)`,
   waveComplete: (wave, total, merged, failed) => `[TaskSwarm] 🌊 Wave ${wave}/${total} complete: ${merged} merged, ${failed} failed`,
+  wavePaused: (wave, total, merged, failed) => `[TaskSwarm] ⏸️ Paused after wave ${wave}/${total}: ${merged} merged, ${failed} failed (awaiting decision)`,
   batchComplete: (id, merged, total, failed) => `[TaskSwarm] ✅ Batch complete: ${merged}/${total} merged, ${failed} failed`,
   batchAborted: (id) => `[TaskSwarm] ⛔ Batch aborted: ${id}`,
   etaLabel: 'ETA: ',

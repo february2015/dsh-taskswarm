@@ -45,6 +45,12 @@ export interface BatchState {
    */
   wavePlan: string[][]
   lanes: LaneState[]
+  /**
+   * 暂停来源（2026-08-17，bug-autonomous-resume）：'operator' = 用户下令暂停
+   * （只有用户能 resume）；'engine' = 引擎自动暂停（pauseOnLaneFailure / 冲突，
+   * supervisor 可自行决定重跑/丢弃/继续）。缺失 = 旧批次，视为 engine。
+   */
+  pausedBy?: 'operator' | 'engine'
 }
 
 export function batchStateDir(stateRoot: string): string {

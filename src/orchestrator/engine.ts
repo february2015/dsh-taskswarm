@@ -32,7 +32,7 @@ import type { MergeResult } from '../worker/merger.ts'
 import type { WorkerHost, LaneSpec, WorkerResult } from './worker-host.ts'
 
 export interface TaskSwarmEvent {
-  type: 'batch-started' | 'lane-done' | 'lane-failed' | 'lane-revise' | 'wave-complete' | 'batch-complete' | 'batch-aborted'
+  type: 'batch-started' | 'lane-done' | 'lane-failed' | 'lane-revise' | 'wave-complete' | 'wave-paused' | 'batch-complete' | 'batch-aborted'
   batchId: string
   /** Present on lane events. */
   lane?: number
@@ -183,13 +183,16 @@ export class TaskSwarmEngine {
   }
 
   /**
-   * 自动初始化兜底：任务包为空（all/空 scope）时，从包内模板 scaffold 两个示例任务，
-   * 让"启动"永不因空项目失败。用户无需知道"初始化"这一内部动作。
+   * 自动初始化兜底：**仅当显式请求示例/demo 时**才 scaffold 示例任务（空项目 `start`
+   * 不再自动跑 demo——2026-08-17，bug-demo-autoinit：operator 说"建一个子任务"被
+   * supervisor 误解成 start all，空项目静默初始化 EXAMPLE-001/002 并跑起了蜂群 demo，
+   * 与用户本意（DSH 子任务）完全不同。现在空项目 start 直接报错并引导，示例任务
+   * 只由显式 scope 触发（如 `start demo`）。
    * @returns 本次实际新建的任务数。
    */
   private autoInitIfEmpty(scope: string): number {
     const trimmed = (scope || 'all').trim()
-    if (trimmed !== '' && trimmed !== 'all') return 0 // 显式 scope 不做自动初始化
+    if (trimmed !== 'demo' && trimmed !== 'example' && trimmed !== 'examples') return 0 // 仅显式示例请求
     if (scanTasks(this.config.tasksRoot, true).length > 0) return 0 // 已有任务包
     const templatesDir = fileURLToPath(new URL('../../templates/tasks/', import.meta.url))
     mkdirSync(this.config.tasksRoot, { recursive: true })
@@ -217,7 +220,14 @@ export class TaskSwarmEngine {
     }
     const initialized = this.autoInitIfEmpty(scope)
     const selected = this.select(scope)
-    if (selected.length === 0) throw new Error('no tasks match the requested scope')
+    if (selected.length === 0) {
+      // 2026-08-17（bug-demo-autoinit）：空项目 start 不再静默跑 demo——报错并引导：
+      // 要么显式 `start demo` 跑示例，要么先让 supervisor 分析需求生成任务包。
+      throw new Error(
+        'no tasks match the requested scope. 项目还没有任务包：请说明需求让 supervisor 先分析并生成任务包，' +
+        '或显式 `start demo` 运行示例任务。',
+      )
+    }
     const waves = buildWaves(selected.map((t) => t.task))
     const batchId = `b-${Date.now().toString(36)}-${randomUUID().slice(0, 6)}`
     this.batchOwners.set(batchId, owner)
@@ -297,6 +307,16 @@ export class TaskSwarmEngine {
       if (diskState && (diskState.phase === 'aborted' || diskState.phase === 'complete')) {
         return
       }
+      // 2026-08-17（bug-pause-wave-write）：pause() 在波次执行途中把磁盘 phase 写成 paused
+      // （协作式：当前波跑完才真正停），但这里用内存里陈旧的 'running' 整份覆盖会把它
+      // 复活成 running——引擎实际已暂停（下一波 while(ctx.paused) 挂起、JM-411 不启动），
+      // 磁盘/dashboard/定时汇报却显示"执行中 · 波次 3/3"（JM 反馈）。磁盘已 paused 时
+      // 保持 paused，等 resume() 再翻回 running。pausedBy 同理：operator 的暂停标记
+      // 必须随 phase 一起继承，否则会被内存快照覆盖丢（bug-autonomous-resume 连带）。
+      if (diskState && diskState.phase === 'paused') {
+        state.phase = 'paused'
+        if (diskState.pausedBy) state.pausedBy = diskState.pausedBy
+      }
       writeBatchState(state)
       // Wave boundary report (supervisor wakes on wave-complete, not lane-done).
       const conflicted = lanes.filter((l) => l.phase === 'conflict').length
@@ -319,6 +339,8 @@ export class TaskSwarmEngine {
       if (shouldPause && !ctx.aborted) {
         ctx.paused = true
         state.phase = 'paused'
+        // 引擎自动暂停（失败/冲突）：pausedBy='engine'，supervisor 可自行决定恢复（重跑/丢弃/继续）。
+        state.pausedBy = 'engine'
         writeBatchState(state)
         // 失败导致的暂停：记录批次 id，resume 时跳过 failed lane（丢弃），避免重跑再失败死循环。
         if (failedCount > 0) this.pausedOnFailureBatch = batchId
@@ -327,15 +349,28 @@ export class TaskSwarmEngine {
       }
     }
 
-    state.phase = ctx.aborted ? 'aborted' : 'complete'
-    state.endedAt = new Date().toISOString()
+    // 2026-08-17（bug-pause-wave-write）：尾部写盘同样尊重 ctx.paused——暂停发生在
+    // 最后一波（或暂停点之后无更多 pending 波）时，批次应停在 paused 等用户处置，
+    // 而不是被写成 complete（状态不一致：引擎/磁盘/dashboard/汇报各自说法）。
+    // 与波次完成写盘一样，resume() 会把 ctx.paused 翻回 false，届时正常走 complete。
+    state.phase = ctx.aborted ? 'aborted' : ctx.paused ? 'paused' : 'complete'
+    if (state.phase !== 'paused') state.endedAt = new Date().toISOString()
+    // 尾部 paused（最后一波完成时仍处暂停）：pausedBy 从磁盘继承（operator pause 的标记
+    // 不能被内存快照覆盖），磁盘没有（旧批次/崩溃遗留）才兜底为 engine。
+    if (state.phase === 'paused') {
+      const diskTail = readBatchState(config.stateRoot, batchId)
+      state.pausedBy = diskTail?.pausedBy ?? 'engine'
+    }
     writeBatchState(state)
     const done = state.lanes.filter((l) => l.phase === 'merged').length
     const failed = state.lanes.filter((l) => l.phase === 'failed').length
     this.emit({
-      type: state.phase === 'aborted' ? 'batch-aborted' : 'batch-complete',
+      type: state.phase === 'aborted' ? 'batch-aborted' : state.phase === 'paused' ? 'wave-paused' : 'batch-complete',
       batchId,
       phase: state.phase,
+      // wave-paused 发生在最后一波完成时：waveIndex/totalWaves 都等于总波数。
+      waveIndex: waves.waves.length,
+      totalWaves: waves.waves.length,
       merged: done,
       failed,
       total: state.lanes.length,
@@ -619,26 +654,35 @@ export class TaskSwarmEngine {
   }
 
   /** Pause after the current wave (cooperative). */
-  pause(): boolean {
+  pause(by: 'operator' | 'engine' = 'operator'): boolean {
     const ctx = this.activeContext()
     if (!ctx) return false
     ctx.paused = true
     const state = readBatchState(this.config.stateRoot, ctx.batchId)
     if (state) {
       state.phase = 'paused'
+      // 2026-08-17（bug-autonomous-resume）：记录暂停来源——operator 下令暂停的批次
+      // 只有 operator 能 resume（resume() 校验来源）；引擎自动暂停（pauseOnLaneFailure /
+      // 冲突）不受此限，supervisor 可自行决定重跑/丢弃/继续。
+      state.pausedBy = by
       writeBatchState(state)
     }
     return true
   }
 
   /** Resume a paused batch. owner = 发起 resume 的会话 agent（重启后换新对话续跑时，
-   *  通知应指向新对话而非 apply 时捕获的旧 supervisorAgent——2026-08-17 修复）。 */
-  resume(owner?: unknown): boolean {
+   *  通知应指向新对话而非 apply 时捕获的旧 supervisorAgent——2026-08-17 修复）。
+   *  by = 调用来源：'operator'（用户显式 /tswarm-resume 或用户明确指示）才放行
+   *  operator 暂停的批次；'engine'/'supervisor' 只能恢复引擎自动暂停（pauseOnLaneFailure）
+   *  或崩溃恢复的批次——绝不允许 supervisor 自主恢复用户下令暂停的批次（JM 事故）。 */
+  resume(owner?: unknown, by: 'operator' | 'supervisor' | 'engine' = 'operator'): boolean {
     const ctx = this.activeContext()
     if (ctx) {
+      const state = readBatchState(this.config.stateRoot, ctx.batchId)
+      // 用户下令暂停的批次：仅 operator 能恢复。supervisor/引擎自动恢复一律拒绝。
+      if (state?.pausedBy === 'operator' && by !== 'operator') return false
       if (owner) this.batchOwners.set(ctx.batchId, owner)
       ctx.paused = false
-      const state = readBatchState(this.config.stateRoot, ctx.batchId)
       if (state) {
         state.phase = 'running'
         writeBatchState(state)
@@ -648,7 +692,10 @@ export class TaskSwarmEngine {
     // 引擎重启后 active 为空：从磁盘恢复未完成批次续跑（方案 A，KI-007）。
     // 已 merged/failed 的 lane 由 runLane 跳过；剩余 pending 任务按新 wave plan 继续。
     // pauseOnLaneFailure 暂停的批次：跳过 failed lane（丢弃失败工作），避免重跑再失败死循环。
-    const skipFailed = this.pausedOnFailureBatch === latestBatch(this.config.stateRoot)?.id
+    const latest = latestBatch(this.config.stateRoot)
+    // operator 暂停的批次：仅 operator 显式 resume 才恢复；supervisor 自主恢复被拒。
+    if (latest?.pausedBy === 'operator' && by !== 'operator') return false
+    const skipFailed = this.pausedOnFailureBatch === latest?.id
     const ok = this.recoverPendingBatch(skipFailed, owner)
     if (ok) this.pausedOnFailureBatch = null
     return ok

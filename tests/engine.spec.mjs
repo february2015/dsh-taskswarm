@@ -5,7 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { TaskSwarmEngine } from '../lib/orchestrator/engine.js'
 import { runGit } from '../lib/core/git.js'
-import { readBatchState, writeBatchState } from '../lib/core/status.js'
+import { readBatchState, writeBatchState, latestBatch } from '../lib/core/status.js'
 import { checkpointCommit, worktreePaths, listLaneWorktrees } from '../lib/core/worktree.js'
 import { markTaskDone, parseStatusFile } from '../lib/core/task.js'
 
@@ -601,6 +601,143 @@ test('pause then resume keeps the original wave count (wavePlan persisted, never
   assert.equal(waveById.get('W-001'), 1)
   assert.equal(waveById.get('W-002'), 2)
   assert.equal(waveById.get('W-003'), 3)
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('pause mid-wave: disk phase stays paused after the wave completes (bug-pause-wave-write)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  // 依赖链：F-001 → G-002 组成 2 个 wave。
+  writeTask(join(tasksRoot, 'F-001-foo'), 'F-001', 'Foo', [])
+  writeTask(join(tasksRoot, 'G-002-bar'), 'G-002', 'Bar', ['F-001'])
+  const stateRoot = join(repo, '.taskswarm')
+  const host = new SlowWorkerHost() // 800ms/lane
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+
+  engine.run('all')
+  // 等 Wave 1（F-001）完成、Wave 2（G-002）已开始跑（800ms lane 中途）。
+  await sleep(1500)
+  // 在 Wave 2 执行途中暂停（JM 场景：JM-407 还在跑时下 pause 指令）。
+  assert.equal(engine.pause(), true, 'pause succeeds mid-wave')
+
+  // 等 Wave 2 真正跑完（execute 波次完成写盘：G-002 → merged）。
+  const deadline = Date.now() + 10_000
+  let disk = latestBatch(stateRoot)
+  while (Date.now() < deadline) {
+    disk = latestBatch(stateRoot)
+    const gLane = disk?.lanes?.find((l) => l.taskId === 'G-002')
+    if (gLane && gLane.phase === 'merged') break
+    await sleep(100)
+  }
+  const gLane = disk.lanes.find((l) => l.taskId === 'G-002')
+  assert.equal(gLane.phase, 'merged', `wave-2 lane merged, got ${gLane.phase}`)
+
+  // 关键断言：磁盘 phase 必须保持 paused——绝不能因 execute 波次完成写盘被覆盖回
+  // running（bug-pause-wave-write：pause() 途中写盘 paused，execute 用内存 running
+  // 整份覆盖，导致 dashboard/汇报显示"执行中"，但引擎实际已暂停）。
+  assert.equal(disk.phase, 'paused', `disk phase stays paused after wave write-back, got ${disk.phase}`)
+
+  // resume 后批次正常继续（无残留 paused 状态卡死）。
+  assert.equal(engine.resume(), true, 'resume succeeds')
+  const deadline2 = Date.now() + 30_000
+  let state2 = engine.status()
+  while (state2 && (state2.phase === 'running' || state2.phase === 'planning') && Date.now() < deadline2) {
+    await sleep(100)
+    state2 = engine.status()
+  }
+  assert.equal(state2.phase, 'complete', `batch completes after resume, got ${state2.phase}`)
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('operator-paused batch: supervisor resume rejected, operator resume allowed (bug-autonomous-resume)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'P-001-papa'), 'P-001', 'Papa', [])
+  writeTask(join(tasksRoot, 'Q-002-quebec'), 'Q-002', 'Quebec', ['P-001'])
+  const stateRoot = join(repo, '.taskswarm')
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host: new SlowWorkerHost() })
+
+  engine.run('all')
+  // 等 Wave 1 完成、Wave 2 进行中，然后 operator 下令暂停。
+  await sleep(1500)
+  assert.equal(engine.pause('operator'), true, 'operator pause succeeds mid-wave')
+
+  // 等 Wave 2 跑完（磁盘保持 paused、pausedBy=operator）。
+  const deadline = Date.now() + 10_000
+  let disk = latestBatch(stateRoot)
+  while (Date.now() < deadline) {
+    disk = latestBatch(stateRoot)
+    const qLane = disk?.lanes?.find((l) => l.taskId === 'Q-002')
+    if (qLane && qLane.phase === 'merged') break
+    await sleep(100)
+  }
+  assert.equal(disk.phase, 'paused', `batch paused, got ${disk.phase}`)
+  assert.equal(disk.pausedBy, 'operator', `pausedBy=operator recorded, got ${disk.pausedBy}`)
+
+  // supervisor 自主 resume → 必须被拒绝（引擎层校验）。
+  assert.equal(engine.resume(undefined, 'supervisor'), false, 'supervisor autonomous resume rejected')
+
+  // operator 显式 resume → 放行，批次继续跑完。
+  assert.equal(engine.resume(undefined, 'operator'), true, 'operator resume allowed')
+  const deadline2 = Date.now() + 30_000
+  let state2 = engine.status()
+  while (state2 && (state2.phase === 'running' || state2.phase === 'planning') && Date.now() < deadline2) {
+    await sleep(100)
+    state2 = engine.status()
+  }
+  assert.equal(state2.phase, 'complete', `batch completes after operator resume, got ${state2.phase}`)
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('engine-auto-paused batch (failed lane): supervisor resume allowed', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'R-001-roger'), 'R-001', 'Roger', [])
+  writeTask(join(tasksRoot, 'S-002-sierra'), 'S-002', 'Sierra', ['R-001'])
+  const stateRoot = join(repo, '.taskswarm')
+  // J-002 类似场景：让 wave 1 的 lane 失败 → 引擎自动暂停。
+  const engine = new TaskSwarmEngine({
+    repoRoot: repo, tasksRoot, stateRoot,
+    host: new (class {
+      constructor() { this.kind = 'fake' }
+      async spawn(spec) {
+        // R-001 正常完成；S-002 直接失败（模拟 pauseOnLaneFailure 的 failed lane 在 wave 1）。
+        if (spec.task.id === 'R-001') {
+          writeFileSync(join(spec.worktree, 'r.txt'), 'ok\n', 'utf-8')
+          checkpointCommit(spec.worktree, 'feat(R-001)')
+          markTaskDone(spec.task.folder)
+          return { exitCode: 0, text: 'ok' }
+        }
+        writeFileSync(join(spec.worktree, 's.txt'), 'bad\n', 'utf-8')
+        checkpointCommit(spec.worktree, 'feat(S-002)')
+        return { exitCode: 1, text: 'boom' }
+      }
+      abort() {}
+    })(),
+  })
+
+  engine.run('all')
+  const deadline = Date.now() + 10_000
+  let state = engine.status()
+  while (state && state.phase === 'running' && Date.now() < deadline) {
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.equal(state.phase, 'paused', `engine auto-paused after failed lane, got ${state.phase}`)
+  assert.equal(state.pausedBy, 'engine', `pausedBy=engine, got ${state.pausedBy}`)
+
+  // 引擎自动暂停：supervisor 有权 resume（跳过 failed lane 继续）。
+  assert.equal(engine.resume(undefined, 'supervisor'), true, 'supervisor resume allowed for engine-paused batch')
+  const deadline2 = Date.now() + 30_000
+  let state2 = engine.status()
+  while (state2 && (state2.phase === 'running' || state2.phase === 'planning') && Date.now() < deadline2) {
+    await sleep(100)
+    state2 = engine.status()
+  }
+  assert.equal(state2.phase, 'complete', `batch completes after supervisor resume, got ${state2.phase}`)
 
   rmSync(repo, { recursive: true, force: true })
 })

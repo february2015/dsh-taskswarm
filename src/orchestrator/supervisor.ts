@@ -109,13 +109,16 @@ export const ACTION_CLASSIFICATION_EXAMPLES: Readonly<Record<RecoveryActionClass
   ],
   tier0_known: [
     'Retrying a failed or timed-out merge',
-    'Resuming a paused batch (tswarm_supervisor_control resume)',
     'Pausing after the current wave (tswarm_supervisor_control pause)',
     'Clearing a git lock file (.git/index.lock)',
     'Cleaning up stale worktrees before a retry',
   ],
   destructive: [
     'Aborting the batch (tswarm_supervisor_control abort)',
+    // 2026-08-17（bug-autonomous-resume）：resume 不再归 tier0_known——operator 下令
+    // 暂停的批次只有 operator 能恢复；supervisor 自主 resume 会被引擎拒绝。引擎自动暂停
+    // 的批次（pauseOnLaneFailure/冲突）supervisor 可自行决定，但仍属状态变更，列 destructive。
+    'Resuming a paused batch (tswarm_supervisor_control resume, operator-only for operator-paused batches)',
     'Merging taskswarm/orch into the working branch (tswarm_supervisor_control integrate)',
     'Running git reset / git checkout -B / git branch -D',
     'Removing worktrees (git worktree remove)',
@@ -177,11 +180,13 @@ export function buildSupervisorSystemPrompt(
 
 You are the batch supervisor, sharing this session with the operator (activated after /tswarm starts a batch). On a [TaskSwarm supervisor] event:
 1. Verify state with tswarm_supervisor_status;
-2. Classify actions: diagnostic (read-only checks, always allowed) / tier0_known (resume, pause, clearing locks, known recoveries) / destructive (abort, integrate, state changes);
-3. Act per autonomy: ${autonomyRule(autonomy, 'en')}
-4. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
-5. Standard procedures for cleanup / error recovery / work salvage are in the repo's docs/runbook.md — read it before handling.
-6. Notifications are already in complete, human-readable language — do NOT translate or repeat them. Judge only whether there is an anomaly or an action needed: if yes, handle/report it briefly; if no, stay quiet or acknowledge in one short line. Never restate the batch status.
+2. Classify actions: diagnostic (read-only checks, always allowed) / tier0_known (pause, clearing locks, known recoveries) / destructive (abort, integrate, state changes);
+3. RESUME IS OPERATOR-ONLY for operator-paused batches: if the batch was paused by the operator (pausedBy=operator), never resume it on your own — the engine rejects autonomous resume. Only resume when the operator explicitly says so in this session ("resume/continue/restart"), then pass byOperator=true. Engine-auto-paused batches (pauseOnLaneFailure/conflict) remain yours to decide (rerun / discard / continue).
+4. "SUBTASK" IS NOT A SWARM BATCH: when the operator says "create a subtask / delegate to a subagent" (e.g. to fix a bug), they mean the harness's ordinary subagent/subtask capability — NOT TaskSwarm. Do NOT call tswarm_supervisor_control start for that. Only start a TaskSwarm batch when the operator explicitly asks for a swarm/batch with clear swarm keywords ("蜂群", "TaskSwarm", "tswarm", "开批次", "start batch", "跑一批任务") — pass byOperator=true only then; otherwise the start action is rejected. Starting a batch in a project with no task packets now errors out with guidance (auto demo init was removed) — never claim a demo batch is a subtask.
+5. Act per autonomy: ${autonomyRule(autonomy, 'en')}
+6. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
+7. Standard procedures for cleanup / error recovery / work salvage are in the repo's docs/runbook.md — read it before handling.
+8. Notifications are already in complete, human-readable language — do NOT translate or repeat them. Judge only whether there is an anomaly or an action needed: if yes, handle/report it briefly; if no, stay quiet or acknowledge in one short line. Never restate the batch status.
 
 ${ctx}
 
@@ -191,11 +196,13 @@ Normal user conversation is unaffected.`
 
 你是 batch supervisor，与 operator 共享此会话（/tswarm 启动批次后激活）。收到 [TaskSwarm supervisor] 事件后：
 1. 用 tswarm_supervisor_status 查证状态；
-2. 分类动作：diagnostic（只读查证，永远可做）/ tier0_known（resume、pause、清锁等已知恢复）/ destructive（abort、integrate、改状态）；
-3. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
-4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
-5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.zh-CN.md，处理前先读它。
-6. 通知已是完善的、可直接阅读的语言——**不要翻译、不要复述**。只需判断是否有异常或需要动作：有异常就简要处理/汇报；无异常保持安静或一句话确认即可，绝不重述批次状态。
+2. 分类动作：diagnostic（只读查证，永远可做）/ tier0_known（pause、清锁等已知恢复）/ destructive（abort、integrate、改状态）；
+3. **resume 对 operator 暂停的批次是 operator-only**：批次若由 operator 下令暂停（pausedBy=operator），**绝不自主 resume**——引擎会拒绝自主恢复。只有 operator 在本会话明确说"恢复/继续跑/重新开始"时才 resume，并传 byOperator=true。引擎自动暂停的批次（pauseOnLaneFailure/冲突）仍由你决定（重跑/丢弃/继续）。
+4. **"子任务"≠ 蜂群批次**：operator 说"建个子任务/委托给 subagent"（如去修个 bug），指的是本会话引擎的原生子任务/子代理能力，**不是 TaskSwarm**——不要为此调用 tswarm_supervisor_control start。只有 operator 用明确蜂群关键词要求开蜂群（"蜂群"/"TaskSwarm"/"tswarm"/"开批次"/"start batch"/"跑一批任务"）才 start，且必须传 byOperator=true，否则 start 会被拒绝。空项目 start 现在会直接报错并引导（自动 demo 已移除），**绝不要把 demo 批次说成子任务**。
+5. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
+6. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
+7. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.zh-CN.md，处理前先读它。
+8. 通知已是完善的、可直接阅读的语言——**不要翻译、不要复述**。只需判断是否有异常或需要动作：有异常就简要处理/汇报；无异常保持安静或一句话确认即可，绝不重述批次状态。
 
 ${ctx}
 
@@ -219,6 +226,8 @@ export function eventHeadline(event: TaskSwarmEvent, locale: Locale): string {
       return m.laneRevise(event.lane ?? 0, event.taskId ?? '')
     case 'wave-complete':
       return m.waveComplete(event.waveIndex ?? 0, event.totalWaves ?? 0, event.merged ?? 0, event.failed ?? 0)
+    case 'wave-paused':
+      return m.wavePaused(event.waveIndex ?? 0, event.totalWaves ?? 0, event.merged ?? 0, event.failed ?? 0)
     case 'batch-complete':
       return m.batchComplete(event.batchId, event.merged ?? 0, event.total ?? 0, event.failed ?? 0)
     case 'batch-aborted':
@@ -608,7 +617,7 @@ export function registerSupervisor(
 
   register(defineTool({
     name: 'tswarm_supervisor_control',
-    description: 'TaskSwarm supervisor 控制。动作分类：status=diagnostic；resume/pause=tier0_known；integrate/abort=destructive（按自主度可能需先征求 operator 确认）。',
+    description: 'TaskSwarm supervisor 控制。动作分类：status=diagnostic；pause=tier0_known；start/resume=仅 operator 明确要求时（见 byOperator：开蜂群须用户明说"蜂群/TaskSwarm"等关键词，"建子任务"不算；resume 仅用户明说"恢复/继续"）；integrate/abort=destructive（按自主度可能需先征求 operator 确认）。',
     parameters: {
       action: {
         type: 'string',
@@ -617,6 +626,10 @@ export function registerSupervisor(
         description: '要执行的控制动作（plan=展示波次计划；start 用 scope 指定任务，如 WEB-006 / all；空项目会自动初始化示例任务）。',
       },
       scope: { type: 'string', description: 'start 动作的任务 scope（任务 ID / all / 路径），默认 all。' },
+      byOperator: {
+        type: 'boolean',
+        description: 'start/resume 动作使用：start 仅当本会话 operator 明确要求开蜂群（出现"蜂群/TaskSwarm/tswarm/开批次/start batch"等关键词）时传 true——"建子任务/委托 subagent"不算；resume 仅当 operator 明确说"恢复/继续跑/重新开始"时传 true。用户下令暂停/未明确要求的批次，supervisor 无权自主启动或恢复。',
+      },
     },
     output: {
       schema: {
@@ -645,11 +658,23 @@ export function registerSupervisor(
           return {
             ok: true,
             text: count === 0
-              ? `No tasks found under ${ref.tasksRoot}. 说需求让我先分析并生成任务包，或 start 会自动初始化示例任务。`
+              ? `No tasks found under ${ref.tasksRoot}。请说明需求让我先分析并生成任务包，或显式 start demo 运行示例任务。`
               : `${count} 个任务 / ${waves.waves.length} 个波次：\n${formatWavePlan(waves)}`,
           }
         }
         case 'start': {
+          // 2026-08-17（bug-demo-autoinit）：**只有 operator 明确表达蜂群意图才允许 start**——
+          // operator 说"建个子任务/委托给 subagent"指引擎原生子任务能力，不是蜂群；
+          // 空项目 start 也不再自动初始化 demo。supervisor 必须看到用户消息里的明确蜂群
+          // 关键词（蜂群 / TaskSwarm / tswarm / 开批次 / start batch / 跑一批任务 等）才可
+          // 传 byOperator=true；否则一律拒绝并引导，绝不在无明确请求时自主开批次。
+          const byOperator = (args as { byOperator?: boolean }).byOperator === true
+          if (!byOperator) {
+            return {
+              ok: false,
+              text: '蜂群批次需要 operator 明确要求才能启动（请确认您是要开 TaskSwarm 蜂群，而不是普通子任务/子代理）。若确认，请说"用蜂群/开批次/TaskSwarm"等并重试（start 需 byOperator=true）。',
+            }
+          }
           const running = engine.status()
           if (running && (running.phase === 'running' || running.phase === 'planning')) {
             return { ok: false, text: `批次 ${running.id} 正在运行，先等它结束或 abort 再启动新批次。` }
@@ -674,9 +699,18 @@ export function registerSupervisor(
         }
         case 'resume': {
           // 传入调用者 agent（toolOwner）：重启后新对话续跑时，通知指向新对话而非旧 supervisorAgent。
-          const ok = engine.resume(toolOwner)
+          // 2026-08-17（bug-autonomous-resume）：用户（operator）下令暂停的批次**只有用户能 resume**——
+          // supervisor 自主调用一律拒绝（引擎层校验 pausedBy==='operator' && by!=='operator' → false）。
+          // 仅当 operator 在本会话明确说"恢复/继续跑/重新开始"时才可传 byOperator=true 放行。
+          const byOperator = (args as { byOperator?: boolean }).byOperator === true
+          const ok = engine.resume(toolOwner, byOperator ? 'operator' : 'supervisor')
           // 引擎重启后 resume 会从磁盘恢复未完成批次续跑（方案 A，KI-007）。
-          return { ok, text: ok ? 'Batch resumed.' : 'No paused batch or recoverable batch to resume.' }
+          return {
+            ok,
+            text: ok
+              ? 'Batch resumed.'
+              : 'Batch is paused by the operator — only the operator can resume it. Do NOT resume autonomously; ask the operator.',
+          }
         }
         case 'pause': {
           const ok = engine.pause()
