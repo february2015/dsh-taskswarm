@@ -214,6 +214,34 @@ export function checkPacketQuality(task: TaskPacket): string[] {
   if (task.steps.length === 0) warnings.push('没有 "### Step N:" 步骤清单（worker 无法推进任务状态）')
   if (task.completionCriteria.length === 0) warnings.push('没有 "## Completion Criteria" 验收项（worker 不知道何时算完成）')
   if (task.fileScope.length === 0) warnings.push('缺 "## File Scope"（建议声明影响文件，便于并行 lane 隔离）')
+  // 2026-08-17（反馈 C）：File Scope 内注释/非路径行会被当文件路径解析（如 `- > 注释`、
+  // `- （说明）xxx`），影响 lane 隔离与并行度判断。fail-fast 提示而非静默吞掉。
+  for (const fs of task.fileScope) {
+    const trimmed = fs.trim()
+    if (trimmed.startsWith('>') || trimmed.startsWith('（') || trimmed.startsWith('(') ||
+        /[（(].*[）)]\s*$/.test(trimmed) || trimmed.includes('  ')) {
+      warnings.push(`"## File Scope" 第行「${trimmed.slice(0, 40)}」看起来不是路径（注释/说明？）——File Scope 只放纯路径行，说明请放 Mission 或 Steps`)
+      break
+    }
+  }
+  // 2026-08-17（反馈 A/D）：依赖节状态诊断——静默"无依赖"是波次编排失效的头号坑。
+  // 有 Dependencies 节但解析不出任何 ID → 节内可能是非 ID 形态的行（如旧式 `- **Task:** 无`），
+  // 或 ID 缺连字符（`- JM408`）。这类行被 bulletIds 静默忽略 → 任务被当无依赖塞进 Wave 1。
+  try {
+    const raw = readFileSync(promptFilePath(task.folder), 'utf-8')
+    const hasSection = /^##\s+Dependencies\s*$/m.test(raw)
+    const depSection = section(raw, 'Dependencies')
+    const noneDeclared = /(?:[-*]\s+\*\*?None\*\*?|\bnone\b)/i.test(depSection)
+    if (!hasSection && task.deps.length === 0) {
+      // 没有 Dependencies 节：如果是故意无依赖可忽略，但给出提示（若任务本应有依赖会暴露）。
+      warnings.push('缺 "## Dependencies" 节（无依赖请保留该节并写 "- **None**" 以示明确）')
+    } else if (hasSection && task.deps.length === 0 && !noneDeclared) {
+      // 有节但没解析出 ID，且不是显式 None：节内行格式不被识别（最典型的静默坑）。
+      warnings.push('"## Dependencies" 节存在但未解析出任何依赖 ID——请检查格式：每行一个 `- JM-XXX`（ID 必须 `[A-Z]+-\d+` 连字符形态），或 `**Requires:** JM-1, JM-2`；明确无依赖请写 `- **None**`')
+    }
+  } catch {
+    // 读不到 PROMPT 时跳过依赖诊断
+  }
   return warnings
 }
 

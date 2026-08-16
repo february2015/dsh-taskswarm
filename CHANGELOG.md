@@ -5,6 +5,35 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.33] - 2026-08-17
+
+### Fixed
+
+- **Periodic reports / stall notices now route to the batch owner, not a stale session** —
+  startup and lane events already went to the session that started the batch (`owner`), but the
+  periodic supervisor's wake was bound to the agent captured at plugin-apply time; with two
+  conversations on the same repo it could deliver periodic reports to an old conversation.
+  `startPeriodicSupervision` now prefers `engine.activeBatchOwnerAgent()` and only falls back to
+  the apply-time agent when no batch is active.
+
+### Changed
+
+- **`/tswarm-plan` now shows structure warnings** (feedback A/P9): besides the wave plan and
+  parse failures, it lists per-task quality warnings — missing `## Dependencies` section,
+  dependency section present but no parseable IDs (the silent "everything piles into Wave 1"
+  trap), non-path lines in File Scope, etc. Previously only `/tswarm-check` showed these.
+- **`checkPacketQuality` dependency diagnostics** (feedback A/D): flags a `## Dependencies`
+  section that exists but yields no IDs (e.g. legacy human-readable lines like `- **Task:** 无`)
+  instead of silently treating the task as dependency-free; an explicit `- **None**` is
+  recognized and not flagged.
+- **File Scope comment-line detection** (feedback C): `- > comment` / `- （说明）` style lines in
+  File Scope are flagged as non-path instead of silently becoming fake file entries.
+
+### Tests
+
+- New test covers the silent-dependency flag, the File-Scope comment flag, and the explicit-None
+  non-flag case. Full suite: 48/48.
+
 ## [0.2.32] - 2026-08-16
 
 ### Changed
@@ -453,6 +482,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.33]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.32...v0.2.33
 [0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30

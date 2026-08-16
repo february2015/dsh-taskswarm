@@ -798,6 +798,20 @@ export class TaskSwarmEngine {
     return { ok: true, message: `lane ${taskId} will rerun with model ${model.trim()} from the next step (checkpoints preserved)` }
   }
 
+  /**
+   * 当前活跃批次（最新一个未 abort 的）的 owner agent——发起该批次的会话 agent。
+   * 定时汇报/卡住检测需要把消息发给**发起批次的会话**（而不是 apply 时捕获的
+   * supervisorAgent，后者在共享引擎/多会话时可能指向旧对话——2026-08-17 修复：
+   * 启动事件走 owner 正确，定时汇报却固定发 supervisorAgent 导致串到老对话）。
+   */
+  activeBatchOwnerAgent(): unknown {
+    for (const [batchId, ctx] of [...this.active].reverse()) {
+      if (ctx.aborted) continue
+      return this.batchOwners.get(batchId)
+    }
+    return undefined
+  }
+
   private activeContext(): RunContext | undefined {
     if (this.active.size === 0) return undefined
     return [...this.active.values()].pop()

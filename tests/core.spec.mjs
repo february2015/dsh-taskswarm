@@ -385,3 +385,73 @@ test('retried lanes attach the old branch, keep checkpoints, and merge newer orc
   runGit(['worktree', 'remove', '--force', paths.orchWorktree], root)
   rmSync(root, { recursive: true, force: true })
 })
+
+test('checkPacketQuality flags silent dependency/File-Scope problems (feedback A/C)', () => {
+  const root = tmp()
+  const t1 = join(root, 'T-001-a')
+  mkdirSync(t1, { recursive: true })
+  // Dependencies 节存在但只有非 ID 行（旧式 `- **Task:** 无`）→ 应警告（P1/P9 静默坑）。
+  writeFileSync(join(t1, 'PROMPT.md'), [
+    '# Task: T-001 — A',
+    '## Dependencies',
+    '- **Task:** 无',
+    '## File Scope',
+    '- src/a.rs',
+    '## Steps',
+    '### Step 0: Work',
+    '- [ ] do',
+    '## Completion Criteria',
+    '- [ ] done',
+    '---',
+  ].join('\n'), 'utf-8')
+  const p1 = parsePrompt(join(t1, 'PROMPT.md'), t1, '')
+  assert.ok(p1)
+  const w1 = checkPacketQuality(p1)
+  assert.ok(w1.some((w) => w.includes('Dependencies') && w.includes('ID')), 'non-ID dependency lines flagged')
+
+  // File Scope 含注释行（`- > xxx`）→ 应警告（P3 fail-fast 诉求）。
+  const t2 = join(root, 'T-002-b')
+  mkdirSync(t2, { recursive: true })
+  writeFileSync(join(t2, 'PROMPT.md'), [
+    '# Task: T-002 — B',
+    '## Dependencies',
+    '- **None**',
+    '## File Scope',
+    '- > 这是注释',
+    '- src/b.rs',
+    '## Steps',
+    '### Step 0: Work',
+    '- [ ] do',
+    '## Completion Criteria',
+    '- [ ] done',
+    '---',
+  ].join('\n'), 'utf-8')
+  const p2 = parsePrompt(join(t2, 'PROMPT.md'), t2, '')
+  assert.ok(p2)
+  const w2 = checkPacketQuality(p2)
+  assert.ok(w2.some((w) => w.includes('File Scope')), 'File-Scope comment line flagged')
+
+  // 合法：`- **None**` 无依赖不警告。
+  const t3 = join(root, 'T-003-c')
+  mkdirSync(t3, { recursive: true })
+  writeFileSync(join(t3, 'PROMPT.md'), [
+    '# Task: T-003 — C',
+    '## Dependencies',
+    '- **None**',
+    '## File Scope',
+    '- src/c.rs',
+    '## Steps',
+    '### Step 0: Work',
+    '- [ ] do',
+    '## Completion Criteria',
+    '- [ ] done',
+    '---',
+  ].join('\n'), 'utf-8')
+  const p3 = parsePrompt(join(t3, 'PROMPT.md'), t3, '')
+  assert.ok(p3)
+  const w3 = checkPacketQuality(p3)
+  assert.ok(!w3.some((w) => w.includes('Dependencies')), 'explicit None is not flagged')
+  assert.ok(!w3.some((w) => w.includes('File Scope')), 'clean File Scope is not flagged')
+
+  rmSync(root, { recursive: true, force: true })
+})

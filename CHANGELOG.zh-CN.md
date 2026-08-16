@@ -5,6 +5,30 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.33] - 2026-08-17
+
+### 修复
+
+- **定时汇报/卡住提醒改为发给发起批次的会话，不再串到旧对话** —— 启动与 lane 事件本就发给
+  owner（发起批次者），但定时 supervisor 的 wake 绑定在插件 apply 时捕获的 agent 上；同一仓库
+  存在两个对话时，定时汇报可能发到旧对话。现在 `startPeriodicSupervision` 优先用
+  `engine.activeBatchOwnerAgent()`，无活跃批次时才回退 apply 时的 agent。
+
+### 变更
+
+- **`/tswarm-plan` 现在也展示结构警告**（反馈 A/P9）：除波次计划与解析失败外，列出每个任务的
+  质量警告——缺 `## Dependencies` 节、有节但解析不出 ID（"全挤进 Wave 1"的静默坑）、File Scope
+  含非路径行等。此前只有 `/tswarm-check` 展示这些。
+- **`checkPacketQuality` 依赖诊断**（反馈 A/D）：`## Dependencies` 节存在但解析不出任何 ID
+  （如旧式人类可读行 `- **Task:** 无`）时显式报错，不再静默当无依赖；显式 `- **None**` 被识别、
+  不误报。
+- **File Scope 注释行检测**（反馈 C）：`- > 注释` / `- （说明）` 这类行在 File Scope 中被标记
+  为非路径，不再静默变成假文件条目。
+
+### 测试
+
+- 新增测试覆盖：静默依赖问题标记、File Scope 注释行标记、显式 None 不误报。全量 48/48。
+
 ## [0.2.32] - 2026-08-16
 
 ### 变更
@@ -395,6 +419,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.33]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.32...v0.2.33
 [0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30

@@ -307,10 +307,15 @@ export function apply(ctx: Context, config: Config): void {
       // 定时检查（常驻、默认开）：卡住检测。定时汇报默认关，由 operator 通过
       // tswarm_supervisor_report_interval 工具开启（"每隔 X 分钟汇报一次"）；
       // .taskswarm/config.json 里的 reportIntervalMinutes 会作为初始间隔（跨重启生效）。
+      // 2026-08-17 修复：wake 优先发给**发起批次的会话**（engine.activeBatchOwnerAgent），
+      // 只有无活跃批次时才回退到 apply 时捕获的 supervisorAgent——此前固定发
+      // supervisorAgent，共享引擎多会话时定时汇报会串到旧对话（启动事件却走 owner，正确）。
       periodic = startPeriodicSupervision(() => ref, (text) => {
-        if (!supervisorAgent.followup) return
+        const owner = engine.activeBatchOwnerAgent() as { followup?(m: unknown): void } | undefined
+        const target = owner ?? supervisorAgent
+        if (!target?.followup) return
         try {
-          supervisorAgent.followup(createUserMessage({
+          target.followup(createUserMessage({
             content: [{ type: 'text', text }],
             source: { kind: 'user' },
           }))
@@ -379,9 +384,17 @@ export function apply(ctx: Context, config: Config): void {
       const scope = invocation.rawInput.trim() || 'all'
       const { waves, count } = ref.engine.plan(scope)
       const failNote = formatTaskFailures(scanTaskFailures(ref.tasksRoot))
+      // 2026-08-17（反馈 A/P9）：plan 同时展示结构警告（依赖节缺失/无合法 ID、File Scope 注释行等），
+      // 让"依赖没生效 → 全挤 Wave 1"这类静默问题在 plan 阶段就暴露。
+      const tasks = scanTasks(ref.tasksRoot, true)
+      const qualityWarnings: string[] = []
+      for (const t of tasks) {
+        for (const w of checkPacketQuality(t.task)) qualityWarnings.push(`  - ${t.task.id}（${t.task.name}）：${w}`)
+      }
+      const qualityNote = qualityWarnings.length > 0 ? `\n\n⚠️ 结构警告（建议修复）：\n${qualityWarnings.join('\n')}` : ''
       return ok(count === 0
         ? `${failNote ? failNote + '\n\n' : ''}No tasks found under ${ref.tasksRoot}. Run /tswarm-init to scaffold examples, or check the tasks root.`
-        : `${count} task(s):\n\n${formatWavePlan(waves)}${failNote ? `\n\n${failNote}` : ''}`)
+        : `${count} task(s):\n\n${formatWavePlan(waves)}${qualityNote}${failNote ? `\n\n${failNote}` : ''}`)
     }),
   })
 
