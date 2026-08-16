@@ -60,38 +60,37 @@ export interface SupervisorMessages {
 }
 
 const zhCN: SupervisorMessages = {
-  batchStarted: (id, total) => `[TaskSwarm supervisor] Batch ${id} 已启动（${total} 个任务）`,
-  laneFailed: (lane, taskId, error) => `[TaskSwarm supervisor] ⚠️ lane ${lane} ${taskId} 失败${error ? `：${error}` : ''}`,
-  laneRevise: (lane, taskId) => `[TaskSwarm supervisor] 🟡 lane ${lane} ${taskId} 待修订（reviewer REVISE）`,
-  waveComplete: (wave, total, merged, failed) => `[TaskSwarm supervisor] 🌊 Wave ${wave}/${total} 完成：${merged} 成功 / ${failed} 失败`,
-  batchComplete: (id, merged, total, failed) => `[TaskSwarm supervisor] ✅ Batch ${id} 完成：${merged}/${total} 成功，${failed} 失败`,
-  batchAborted: (id) => `[TaskSwarm supervisor] ⛔ Batch ${id} 已中止`,
-  etaLabel: '预计剩余：',
+  // 通知消息体统一英文极简（省 token）；supervisor 会按当前会话语言向用户解释。
+  batchStarted: (id, total) => `[TS started] ${id} · ${total} tasks`,
+  laneFailed: (lane, taskId, error) => `[TS lane failed] L${lane} ${taskId}${error ? ` · ${error.slice(0, 80)}` : ''}`,
+  laneRevise: (lane, taskId) => `[TS revise] L${lane} ${taskId} (reviewer REVISE)`,
+  waveComplete: (wave, total, merged, failed) => `[TS wave ${wave}/${total} done] ${merged} merged · ${failed} failed`,
+  batchComplete: (id, merged, total, failed) => `[TS batch complete] ${merged}/${total} merged · ${failed} failed`,
+  batchAborted: (id) => `[TS aborted] ${id}`,
+  etaLabel: 'ETA ',
   noBatchState: '(no batch state)',
   stalled: (id, minutes) =>
-    `[TaskSwarm supervisor] ⏱️ 疑似卡住：批次 ${id} 已约 ${minutes} 分钟无任何 lane 变化，且 worker 会话日志同样超时。` +
-    '请用 tswarm_supervisor_status / 只读工具查证 lane 日志，判断是继续等待、pause 还是 abort。',
+    `[TS stalled] ${id} no lane changes ~${minutes}m and session logs stale. Inspect with tswarm_supervisor_status, then wait / pause / abort.`,
   progressStalled: (lane, taskId, minutes) =>
-    `[TaskSwarm supervisor] 🐢 lane ${lane} ${taskId} 会话活跃但 STATUS.md 已约 ${minutes} 分钟未推进（无 advance）。` +
-    'worker 可能在攒批——请提醒它每完成一步就 task_runner advance（进度显示与崩溃恢复依赖增量检查点）。',
-  periodicReport: (minutes) => `[TaskSwarm supervisor] ⏱️ 定时汇报（每 ${minutes} 分钟）：`,
-  reportIntervalOn: (minutes) => `定时进度汇报已开启：每 ${minutes} 分钟汇报一次。`,
-  reportIntervalOff: '定时进度汇报已关闭。',
-  invalidInterval: (minutes) => `无效间隔：${minutes} 分钟（需要 ≥0 的整数，0=关闭）`,
-  waveHeader: (current, total) => `当前 Wave: ${current}/${total}`,
-  etaDone: '已完成',
-  etaEstimating: '估算中（尚无已完成 lane）',
-  etaBaseOne: (seconds) => `已完成 1 个 lane 用时 ${seconds}s`,
-  etaBaseMany: (count, seconds) => `已完成 ${count} 个 lane 平均用时 ${seconds}s`,
-  etaFmt: (minutes, base, _seconds, remaining, parallel) => `约 ${minutes} 分钟（${base} × ${remaining} 个剩余 lane ÷ 并行度 ${parallel}）`,
+    `[TS 🐢 progress] L${lane} ${taskId} active but no advance ~${minutes}m — worker may be batching; remind it to \`advance\` after each checkbox.`,
+  periodicReport: (minutes) => `[TS report · every ${minutes}m]`,
+  reportIntervalOn: (minutes) => `Periodic reports on: every ${minutes} min.`,
+  reportIntervalOff: 'Periodic reports off.',
+  invalidInterval: (minutes) => `Invalid interval: ${minutes} min (integer ≥ 0; 0 = off)`,
+  waveHeader: (current, total) => `W${current}/${total}`,
+  etaDone: 'done',
+  etaEstimating: 'estimating',
+  etaBaseOne: (seconds) => `1 lane ${seconds}s`,
+  etaBaseMany: (count, seconds) => `${count} lanes avg ${seconds}s`,
+  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes}m (${base} × ${remaining} lanes ÷ ${parallel})`,
   localeCurrent: (locale) =>
     `当前 supervisor 语言：${locale === 'en' ? '英文 (en)' : '中文 (zh-CN)'}（说"用英文"/"用中文"可切换；"自动"恢复按会话语言检测）`,
   localeSwitchedTo: (locale, configPath) =>
     `已切换为${locale === 'en' ? '英文' : '中文'}，通知与 supervisor 提示词即时生效，并已写入 ${configPath}。`,
-  dashboardUrl: (url) => `📊 Dashboard 已启动：${url}（浏览器打开即可查看实时进度）`,
-  sessionsUsage: (bytes) => `💾 本批次 worker 会话磁盘占用：${bytes}`,
+  dashboardUrl: (url) => `📊 Dashboard: ${url}`,
+  sessionsUsage: (bytes) => `💾 ${bytes}`,
   cleanupOffer: (bytes) =>
-    `✅ 全部任务已成功合并。要清理本批次 worker 的对话历史文件（${bytes}）吗？回复「保留」或「删除」即可。`,
+    `✅ All merged. Delete this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
 }
 
 const en: SupervisorMessages = {

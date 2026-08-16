@@ -81,14 +81,15 @@ test('resolveLocale: 显式 config 优先于检测', () => {
 test('messages: 双语字典关键事件标题', () => {
   const zh = messages('zh-CN')
   const en = messages('en')
-  assert.match(zh.batchStarted('b-1', 3), /已启动/)
+  // 通知消息体统一英文极简（省 token）；supervisor 按会话语言向用户解释。
+  assert.match(zh.batchStarted('b-1', 3), /\[TS started\]/)
   assert.match(en.batchStarted('b-1', 3), /\[TS started\]/)
   assert.match(en.batchAborted('b-1'), /\[TS aborted\]/)
-  assert.match(zh.waveComplete(1, 3, 2, 1), /Wave 1\/3/)
+  assert.match(zh.waveComplete(1, 3, 2, 1), /\[TS wave 1\/3 done\]/)
   assert.match(en.waveComplete(1, 3, 2, 1), /\[TS wave 1\/3 done\] 2 merged · 1 failed/)
   assert.match(en.laneFailed(2, 'DEMO-006', 'worker exited 1'), /\[TS lane failed\] L2 DEMO-006/)
   assert.match(en.periodicReport(5), /\[TS report · every 5m\]/)
-  assert.match(zh.laneFailed(2, 'DEMO-006'), /失败/)
+  assert.equal(zh.waveComplete(1, 3, 2, 1), en.waveComplete(1, 3, 2, 1), 'zh and en notifications identical (English terse)')
 })
 
 test('settings: config.json 合并读写 / locale / reportIntervalMinutes', () => {

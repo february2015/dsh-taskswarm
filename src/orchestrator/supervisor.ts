@@ -181,6 +181,7 @@ You are the batch supervisor, sharing this session with the operator (activated 
 3. Act per autonomy: ${autonomyRule(autonomy, 'en')}
 4. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
 5. Standard procedures for cleanup / error recovery / work salvage are in the repo's docs/runbook.md — read it before handling.
+6. Notifications arrive as terse English \`[TS ...]\` lines to save tokens — relay them to the operator in the current conversation language (e.g. Chinese if they write Chinese), briefly and clearly.
 
 ${ctx}
 
@@ -194,6 +195,7 @@ Normal user conversation is unaffected.`
 3. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
 4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
 5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.zh-CN.md，处理前先读它。
+6. 通知以极简英文 \`[TS ...]\` 到达以节省 token——请用当前会话语言（如用户说中文就用中文）向用户简要清晰地转述进度。
 
 ${ctx}
 

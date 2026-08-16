@@ -5,6 +5,15 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.26] - 2026-08-16
+
+### 变更
+
+- **通知不分语言，一律英文极简（省 token）** —— 中文 locale 字典现在产出与英文相同的极简
+  `[TS ...]` 消息（短批次 id、`L<n>`、`steps X/Y · N`、`W1/2`）。supervisor 系统提示词指示
+  agent 收到这些通知后用**当前会话语言**向用户转述——例如用户用中文，agent 收到英文
+  `[TS wave 1/2 done] 2 merged · 1 failed` 后会以中文解释。locale 仍控制 supervisor 提示词语言。
+
 ## [0.2.25] - 2026-08-16
 
 ### 变更
@@ -304,6 +313,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23

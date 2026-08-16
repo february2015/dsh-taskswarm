@@ -5,6 +5,17 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.26] - 2026-08-16
+
+### Changed
+
+- **Notifications are English-terse regardless of locale (saves tokens)** — the Chinese locale
+  dictionary now produces the same terse `[TS ...]` English messages as English (short batch id,
+  `L<n>`, `steps X/Y · N`, `W1/2`). The supervisor system prompt instructs the agent to relay
+  these notifications to the operator **in the current conversation language** — e.g. the user
+  writes Chinese, the agent gets a terse English `[TS wave 1/2 done] 2 merged · 1 failed` line
+  and explains it in Chinese. Locale still controls the supervisor prompt language.
+
 ## [0.2.25] - 2026-08-16
 
 ### Changed
@@ -347,6 +358,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
