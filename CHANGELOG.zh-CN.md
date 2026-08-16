@@ -5,6 +5,20 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.27] - 2026-08-16
+
+### 修复
+
+- **reviewer 会话现在也是 full access + 免审批** —— reviewer spawner 的 `setup` 此前漏了
+  `grantWorkerFullAccess()`，导致 reviewer agent 运行在默认 `workspace-write` + `ask` 权限下，
+  触发授权提醒（jm 批次实测：reviewer 请求 workspace-write 权限）。现已注入
+  `sandbox/mode: danger-full-access` + `approval/policy: never`，与 worker、merger 一致。
+- **headless worker（runner）同样注入 full access** —— headless worker 路径此前只挂载工具、
+  未注入权限；现在与 in-process worker 一致。
+- **回归防护** —— 新增测试审计全部四个 agent spawner
+  （`in-process-host` / `reviewer` / `merger` / `runner`），要求它们的 `setup` 必须调用
+  `grantWorkerFullAccess`，此类问题不会再静默复发。
+
 ## [0.2.26] - 2026-08-16
 
 ### 变更
@@ -313,6 +327,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24

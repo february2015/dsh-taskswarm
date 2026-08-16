@@ -5,6 +5,21 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.27] - 2026-08-16
+
+### Fixed
+
+- **Reviewer sessions now get full access + approvals off** — the reviewer spawner's `setup`
+  missed `grantWorkerFullAccess()`, so reviewer agents ran under the default `workspace-write` +
+  `ask` policy and triggered approval prompts (observed on jm batch: a reviewer asked for
+  workspace-write permission). It now injects `sandbox/mode: danger-full-access` +
+  `approval/policy: never`, matching workers and mergers.
+- **Headless workers (runner) also grant full access** — the headless worker path only mounted
+  tools without the permission injection; it now matches the in-process worker.
+- **Regression guard** — a new test audits all four agent spawners
+  (`in-process-host` / `reviewer` / `merger` / `runner`) to require `grantWorkerFullAccess` in
+  their `setup`, so this class of bug cannot silently return.
+
 ## [0.2.26] - 2026-08-16
 
 ### Changed
@@ -358,6 +373,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25
 [0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24

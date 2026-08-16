@@ -80,6 +80,10 @@ export function createReviewerSpawner(
       meta: { cwd: request.worktree, origin: 'subagent' },
       agentOptions: { provider: selection.provider, model },
       setup: (agentCtx) => {
+        // Reviewer 也是内部 agent：必须 full access + approvals off（2026-08-16 修复——
+        // 此前漏了 grantWorkerFullAccess，reviewer 会话保持默认 workspace-write + ask，
+        // 会触发授权提醒）。
+        grantWorkerFullAccess(agentCtx as unknown as Context)
         mountStandardTools(agentCtx as unknown as Context)
       },
     })

@@ -17,6 +17,7 @@ import { createUserMessage } from '@deepseek-ai/dsh-llm'
 import { TASKSWARM_WORKER_STARTUP_SERVICE, type TaskSwarmWorkerStartupValues } from './startup.ts'
 import { registerLaneTools, buildWorkerMission, type LaneRuntime } from './lane-tools.ts'
 import { createReviewerSpawner, lastAssistantText, type ReviewerDeps } from './reviewer.ts'
+import { mountStandardTools, grantWorkerFullAccess } from './worker-tools.ts'
 import type {} from '@deepseek-ai/cordis-plugin-loader'
 import type {} from '@deepseek-ai/dsh-cmdline'
 
@@ -64,6 +65,9 @@ async function run(ctx: Context, startup: TaskSwarmWorkerStartupValues, io: Work
       model: startup.model ?? selection.model,
     },
     setup: (agentCtx) => {
+      // Headless worker 同样需要 full access + approvals off（与 in-process worker 一致）。
+      grantWorkerFullAccess(agentCtx as unknown as Context)
+      mountStandardTools(agentCtx as unknown as Context)
       registerLaneTools(agentCtx as unknown as { tools: { register(def: unknown): unknown } }, lane)
     },
   })
