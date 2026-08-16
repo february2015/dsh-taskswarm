@@ -36,6 +36,8 @@ export interface SupervisorMessages {
   stalled(id: string, minutes: number): string
   /** 会话活跃但 STATUS 长时间无 advance：worker 可能在攒批，进度显示滞后（B2）。 */
   progressStalled(lane: number, taskId: string, minutes: number): string
+  /** 每条通知附带的嘱咐：无需翻译/复述，只判断异常（省 token）。 */
+  noRestate: string
   periodicReport(minutes: number): string
   reportIntervalOn(minutes: number): string
   reportIntervalOff: string
@@ -75,6 +77,7 @@ const zhCN: SupervisorMessages = {
   progressStalled: (lane, taskId, minutes) =>
     `[TaskSwarm] 🐢 进度停滞：lane ${lane} ${taskId} 会话活跃但约 ${minutes} 分钟未 advance——` +
     'worker 可能在攒批，提醒它每完成一步就 advance（进度显示与崩溃恢复依赖增量检查点）。',
+  noRestate: '（收到后无需翻译或复述，只需判断有无异常/需要动作；无异常保持安静或一句话确认即可）',
   periodicReport: (minutes) => `[TaskSwarm] ⏱️ 定时汇报（每 ${minutes} 分钟）：`,
   reportIntervalOn: (minutes) => `定时汇报已开启：每 ${minutes} 分钟一次。`,
   reportIntervalOff: '定时汇报已关闭。',
@@ -111,6 +114,7 @@ const en: SupervisorMessages = {
   progressStalled: (lane, taskId, minutes) =>
     `[TaskSwarm] 🐢 Progress stalled: lane ${lane} ${taskId} is active but has not advanced for ~${minutes} minutes — ` +
     'the worker may be batching; remind it to `advance` after each checkbox (progress display and crash recovery depend on incremental checkpoints).',
+  noRestate: '（On receipt: do NOT translate or restate this message; judge only whether there is an anomaly or an action needed — if none, stay quiet or acknowledge in one short line.）',
   periodicReport: (minutes) => `[TaskSwarm] ⏱️ Periodic report (every ${minutes} minutes):`,
   reportIntervalOn: (minutes) => `Periodic reports enabled: every ${minutes} minutes.`,
   reportIntervalOff: 'Periodic reports disabled.',

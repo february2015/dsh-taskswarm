@@ -5,6 +5,14 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.32] - 2026-08-16
+
+### 变更
+
+- **每条 supervisor 通知末尾附带"无需复述"嘱咐** —— 此前"不要翻译/复述、只判断异常"只写在
+  系统提示词里；现在每条唤醒消息（启动 / 波次完成 / lane 失败 / 定时汇报 / 卡住 / 批次完成）
+  都带一行双语提醒，即使长上下文稀释了系统提示词，模型也不会向用户复述状态。
+
 ## [0.2.31] - 2026-08-16
 
 ### 修复
@@ -387,6 +395,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29

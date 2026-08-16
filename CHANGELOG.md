@@ -5,6 +5,16 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.32] - 2026-08-16
+
+### Changed
+
+- **Every supervisor notification now ends with an explicit no-restate instruction** — previously
+  the "don't translate / don't restate, only judge anomalies" rule lived only in the system prompt;
+  now each wake message (started / wave complete / lane failed / periodic report / stalled / batch
+  complete) also carries a one-line reminder (bilingual), so the model never re-explains the
+  status back to the user even if the system prompt gets diluted by long context.
+
 ## [0.2.31] - 2026-08-16
 
 ### Fixed
@@ -443,6 +453,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29

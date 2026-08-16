@@ -245,6 +245,8 @@ export function supervisorEventReport(event: TaskSwarmEvent, state: BatchState |
   } else {
     lines.push(m.noBatchState)
   }
+  // 每条通知附带嘱咐：无需翻译/复述，只判断异常（省 token，防模型复述）。
+  lines.push('', m.noRestate)
   return lines.join('\n')
 }
 
@@ -999,7 +1001,7 @@ export function startPeriodicSupervision(
       const loc = refLocale()
       const etaLine = eta && eta !== m.etaLabel ? `${m.etaLabel}${eta}` : ''
       const usage = m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))
-      wake([m.periodicReport(mins), compactBatchStatus(state, loc), etaLine, usage].filter(Boolean).join('\n'))
+      wake([m.periodicReport(mins), compactBatchStatus(state, loc), etaLine, usage, m.noRestate].filter(Boolean).join('\n'))
     }
   }
 
