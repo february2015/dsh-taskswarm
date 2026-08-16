@@ -1,8 +1,8 @@
 # TaskSwarm（蜂群）
 
-> ⚠️ **临时包名通告（2026-08-17 ~ 08-18）**：npm 包 `dsh-taskswarm` 因清理历史版本被整体删除，**24 小时内无法重新发布**（npm 防抢注保护）。此期间请用临时包名安装：
-> `dsh plugin add dsh-taskswarm2@0.2.38`（或 `npm i dsh-taskswarm2@0.2.38`）。
-> **24 小时后（约 08-18 23:25 北京时间）恢复标准包名** `dsh-taskswarm@0.2.38`，届时本通告移除。
+> ⚠️ **Temporary package-name notice (Aug 17–18, 2026)**: the npm package `dsh-taskswarm` was fully unpublished to clean up old versions and is subject to a 24-hour cool-down (npm's anti-squatting protection). **For Aug 17 and Aug 18, install via the temporary name**:
+> `dsh plugin add dsh-taskswarm2@0.2.38` (or `npm i dsh-taskswarm2@0.2.38`).
+> **Starting Aug 19, the standard name returns**: `dsh plugin add dsh-taskswarm@0.2.38`. This notice will be removed then.
 
 **Multi-agent task orchestration for [DeepSeek Harness (DSH)](https://github.com/deepseek-ai).**
 
