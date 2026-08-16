@@ -131,6 +131,7 @@ dsh plugin --profile web add ~/myProject/tswarm   # 追加 taskswarm bundle 到 
 | `supervisorCheckIntervalMs`            | 60000                                    | 定时检查间隔（1 分钟，只读零成本）                                       |
 | `supervisorStalledMs`                  | 420000                                   | 卡住判定阈值（7 分钟无 lane 变化）                                    |
 | `laneTimeoutMinutes`                   | 180                                      | 单 lane 看门狗超时（分钟）：worker 超时无完成事件 → 强制结束该 lane（failed）并继续下一 wave（KI-007 方案 B）。`0` = 禁用（不建议，退回"只能重启引擎"的假死态） |
+| `pauseOnLaneFailure`                   | `true`                                   | 波次内出现 failed lane → 该波其余 lane 跑完后**自动暂停**批次等 supervisor 处置（失败不直接滚到下一 wave）。resume 时跳过 failed lane（丢弃失败工作）；想重跑失败任务用 `/tswarm <taskId>` 单独跑。`false` = 失败后继续下一 wave |
 | `locale`                               | `auto`                                   | supervisor 通知/提示词语言：`auto`（按会话语言检测）/ `zh-CN` / `en`。运行时可用文字切换并写入 `.taskswarm/config.json`（见 §3.5） |
 
 ### 3.5 仓库级配置文件（`.taskswarm/config.json`）

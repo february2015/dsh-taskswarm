@@ -67,6 +67,8 @@ export interface Config {
   /** 单 lane 看门狗超时（分钟），默认 90：worker 超时无完成事件 → 强制结束该 lane（failed），
    *  防止失联 worker 卡死 wave、批次只能靠重启引擎恢复（KI-007 方案 B）。0 = 禁用。 */
   laneTimeoutMinutes?: number
+  /** 波次内出现 failed lane 时自动暂停批次等 supervisor 处置（默认 true）。 */
+  pauseOnLaneFailure?: boolean
 }
 
 export const Config: z<Config> = z.object({
@@ -87,6 +89,7 @@ export const Config: z<Config> = z.object({
   supervisorStalledMs: z.number().default(420_000),
   locale: z.union([z.const('auto'), z.const('zh-CN'), z.const('en')]).default('auto'),
   laneTimeoutMinutes: z.number().default(180),
+  pauseOnLaneFailure: z.boolean().default(true),
 })
 
 interface EngineRef {
@@ -272,6 +275,7 @@ export function apply(ctx: Context, config: Config): void {
       stateRoot,
       host,
       laneTimeoutMinutes: config.laneTimeoutMinutes,
+      ...(config.pauseOnLaneFailure != null ? { pauseOnLaneFailure: config.pauseOnLaneFailure } : {}),
       ...(config.workerModel ? { workerModel: config.workerModel } : {}),
       ...(config.reviewerModel ? { reviewerModel: config.reviewerModel } : {}),
       ...(config.mergerModel ? { mergerModel: config.mergerModel } : {}),
@@ -450,6 +454,16 @@ export function apply(ctx: Context, config: Config): void {
       const active = state.lanes.filter((l) => l.phase === 'running' || l.phase === 'review' || l.phase === 'conflict')
       if (active.length === 0) return ok('No active lanes.')
       return ok(active.map((l) => `lane ${l.lane} [${l.phase}] ${l.taskId} @ ${l.worktree ?? '?'}`).join('\n'))
+    }),
+  })
+
+  registerCommand(['tswarm-stop-lane', 'orch-stop-lane'], {
+    description: 'stop one lane immediately (kill its worker, mark failed, preserve worktree/checkpoints); other lanes continue; the batch pauses after the wave for disposition',
+    handler: (invocation) => withEngine(invocation, (ref) => {
+      const scope = invocation.rawInput.trim()
+      if (!scope) return err('Usage: /tswarm-stop-lane <taskId>')
+      const result = ref.engine.stopLane(scope.toUpperCase())
+      return result.ok ? ok(result.message) : err(result.message)
     }),
   })
 

@@ -5,6 +5,27 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.24] - 2026-08-16
+
+### Added
+
+- **`/tswarm-stop-lane <taskId>`** (alias `/orch-stop-lane`) — actively stop one lane immediately:
+  kill its worker (no waiting for the watchdog), mark it failed, preserve the worktree/checkpoints
+  for salvage. Sibling lanes in the same wave are unaffected; if `pauseOnLaneFailure` is on
+  (default), the batch auto-pauses after the wave for disposition.
+- **`pauseOnLaneFailure` config (default `true`)** — a failed lane now auto-pauses the batch after
+  its wave instead of rolling straight into the next one, so the supervisor can dispose of it
+  (rerun / drop / continue). On `resume`, failed lanes are **skipped** (failed work is dropped);
+  rerun a failed task separately with `/tswarm <taskId>`. This is distinct from crash-recovery
+  resumes, where failed lanes are rerun to continue their checkpoints (KI-007).
+
+### Fixed
+
+- Stop-lane race: a lane stopped via `/tswarm-stop-lane` stayed `failed` even if its worker later
+  returned normally (previously the normal completion path could resurrect it to `merged`).
+- `pauseOnLaneFailure` resume no longer loops: resuming a failure-paused batch drops the failed
+  lanes instead of re-running them into another failure → another pause.
+
 ## [0.2.23] - 2026-08-16
 
 ### Added
@@ -306,6 +327,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21

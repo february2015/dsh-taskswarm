@@ -5,6 +5,25 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.24] - 2026-08-16
+
+### 新增
+
+- **`/tswarm-stop-lane <taskId>`**（别名 `/orch-stop-lane`）—— 立即停掉单个 lane：终止其 worker
+  （不等看门狗）、标记 failed、保留 worktree/检查点供抢救。同波其他 lane 不受影响；
+  `pauseOnLaneFailure`（默认开）开启时该波结束后批次自动暂停等处置。
+- **`pauseOnLaneFailure` 配置（默认 `true`）** —— failed lane 不再直接滚到下一 wave，而是在
+  该波结束后**自动暂停**让 supervisor 处置（重跑 / 丢弃 / 继续）。`resume` 时跳过 failed lane
+  （丢弃失败工作）；重跑失败任务用 `/tswarm <taskId>` 单独跑。这与崩溃恢复的 resume 区分——
+  后者 failed lane 会重跑续接检查点（KI-007）。
+
+### 修复
+
+- stop-lane 竞态：被 `/tswarm-stop-lane` 停掉的 lane 即使 worker 后续正常返回也保持 failed
+  （此前正常完成路径可能把它复活为 merged）。
+- `pauseOnLaneFailure` 的 resume 不再死循环：恢复失败暂停的批次时丢弃 failed lane，而非
+  重跑再失败 → 再暂停。
+
 ## [0.2.23] - 2026-08-16
 
 ### 新增
@@ -265,6 +284,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.24]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.23...v0.2.24
 [0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21

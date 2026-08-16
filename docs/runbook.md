@@ -127,6 +127,7 @@ Uninstall: `dsh plugin --profile web remove taskswarm` (a restart is also requir
 | `supervisorMode`                       | `supervised`                             | `off` / `interactive` / `supervised` / `autonomous` (autonomy level) |
 | `supervisorCheckIntervalMs`            | 60000                                    | periodic check interval (1 minute, read-only, zero cost) |
 | `supervisorStalledMs`                  | 420000                                   | stalled detection threshold (7 minutes without lane changes) |
+| `pauseOnLaneFailure`                   | `true`                                   | a failed lane auto-pauses the batch after the wave for disposition (failure never rolls into the next wave); `resume` then skips the failed lane (drops the work) — rerun it separately with `/tswarm <taskId>`. `false` = continue past failures |
 | `locale`                               | `auto`                                   | supervisor notification/prompt language: `auto` (detect from session) / `zh-CN` / `en`. Switchable at runtime by text, persisted to `.taskswarm/config.json` (see §3.5) |
 
 ### 3.5 Repository-level Config File (`.taskswarm/config.json`)

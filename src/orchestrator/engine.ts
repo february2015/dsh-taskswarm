@@ -65,6 +65,9 @@ export interface EngineConfig {
    *  （只报告不杀——不阻塞后续 merge 队列，agent 会话由 spawner 的 finally 收尾）。
    *  默认 10（借鉴 TaskPlane merge.timeout_minutes）。0 = 不启用。 */
   mergerTimeoutMinutes?: number
+  /** 波次内出现 failed lane 时，该波其余 lane 跑完后自动暂停批次等 supervisor 处置
+   *  （默认 true——失败不能直接滚到下一 wave）。 */
+  pauseOnLaneFailure?: boolean
   includeDoneTasks?: boolean
   /** 单 lane 看门狗超时（分钟）：worker 超过该时长无完成事件 → 强制结束该 lane（failed，
    *  worktree/分支保留可排查），避免失联 worker 永久卡住当前 wave（KI-007 方案 B）。
@@ -87,12 +90,19 @@ interface RunContext {
   /** 由 abort() resolve；runLaneWorker 用它立即中断在途 worker/merger await。 */
   abortWaiter?: Promise<void>
   resolveAbort?: () => void
+  /** per-lane 停止信号：stopLane(taskId) 对指定 lane resolve，runLaneWorker 立即中断
+   *  （主动停掉卡住的 lane，不等看门狗超时）。key = lane number。 */
+  laneStopWaiters: Map<number, Promise<void>>
+  laneStopResolvers: Map<number, () => void>
 }
 
 export class TaskSwarmEngine {
   private readonly active = new Map<string, RunContext>()
   /** batchId → 发起该 batch 的会话 agent（事件只回发给它，避免跨会话串消息）。 */
   private readonly batchOwners = new Map<string, unknown>()
+  /** pauseOnLaneFailure 暂停的批次 id：resume 时应跳过 failed lane（丢弃），而非重跑。
+   *  与"崩溃恢复"的 paused 批次区分——后者 failed lane 需重跑续接（KI-007）。 */
+  private pausedOnFailureBatch: string | null = null
   /**
    * Merge mutex：同一 wave 的多个 lane 并行完成，但 orch worktree 的
    * `git merge` 必须串行——并发 merge 会被 git 锁拒绝（stderr 为空，
@@ -245,7 +255,11 @@ export class TaskSwarmEngine {
   private makeRunContext(batchId: string, paths: WorktreePaths): RunContext {
     let resolveAbort: (() => void) | undefined
     const abortWaiter = new Promise<void>((resolve) => { resolveAbort = resolve })
-    return { batchId, config: this.config, paths, paused: false, aborted: false, abortWaiter, resolveAbort }
+    return {
+      batchId, config: this.config, paths, paused: false, aborted: false,
+      abortWaiter, resolveAbort,
+      laneStopWaiters: new Map(), laneStopResolvers: new Map(),
+    }
   }
 
   private async execute(ctx: RunContext, waves: WavePlan, state: BatchState): Promise<void> {
@@ -295,10 +309,16 @@ export class TaskSwarmEngine {
       })
       // B3#3：本波有 merge 冲突未解决 → 自动暂停，等 supervisor 处置（人工修复后 resume，
       // 或决定重跑）。避免批次带着冲突 lane 继续跑、supervisor 手工介入与后台重试竞态。
-      if (conflicted > 0 && !ctx.aborted) {
+      // 2026-08-16 扩展：pauseOnLaneFailure（默认开）时，failed lane 同样触发——失败不能
+      // 直接滚到下一 wave，先停下来让 supervisor 处置（重跑 / 丢弃 / 继续）。
+      const failedCount = lanes.filter((l) => l.phase === 'failed').length
+      const shouldPause = conflicted > 0 || (failedCount > 0 && (config.pauseOnLaneFailure ?? true))
+      if (shouldPause && !ctx.aborted) {
         ctx.paused = true
         state.phase = 'paused'
         writeBatchState(state)
+        // 失败导致的暂停：记录批次 id，resume 时跳过 failed lane（丢弃），避免重跑再失败死循环。
+        if (failedCount > 0) this.pausedOnFailureBatch = batchId
         // 波次完成后立即退出执行循环（下一波由 resume 重新调度）。
         return
       }
@@ -408,6 +428,23 @@ export class TaskSwarmEngine {
     if (result.error) lane.error = result.error
     laneLog(lane, `worker exited ${result.exitCode}${result.error ? ` (${result.error})` : ''}`)
 
+    // stopLane 竞态防护：该 lane 被 /tswarm-stop-lane 标记 failed 后，即使 worker 后续
+    // 正常返回，也保持 failed（stop 的语义是"丢弃此 lane"，不因收尾而复活为 merged）。
+    try {
+      const disk = readBatchState(config.stateRoot, batchId)
+      const dl = disk?.lanes?.find((x) => x.taskId === task.id)
+      if (dl && dl.phase === 'failed' && dl.error?.includes('stopped by operator')) {
+        lane.phase = 'failed'
+        lane.error = 'stopped by operator'
+        lane.endedAt = new Date().toISOString()
+        laneLog(lane, 'lane stopped by operator — keeping failed')
+        updateLane(state.stateRoot, batchId, lane)
+        return lane
+      }
+    } catch {
+      // 磁盘不可读时按正常收尾
+    }
+
     checkpointCommit(wt.dir, `taskswarm: ${task.id} worker exit`)
     const verdict = this.readLatestVerdict(task.folder)
     lane.reviewVerdict = verdict
@@ -516,44 +553,50 @@ export class TaskSwarmEngine {
     const abortNow = ctx.abortWaiter
       ? ctx.abortWaiter.then(() => ({ exitCode: 1, text: '', error: 'aborted' } satisfies WorkerResult))
       : undefined
-    const timeoutMin = config.laneTimeoutMinutes ?? 0
-    if (!(timeoutMin > 0)) {
-      if (!abortNow) return config.host.spawn(spec)
-      return Promise.race([config.host.spawn(spec), abortNow])
-    }
-
-    const timeoutMs = timeoutMin * 60_000
-    let timer: NodeJS.Timeout | undefined
-    const timeout = new Promise<WorkerResult>((resolve) => {
-      timer = setTimeout(() => {
-        // 看门狗触发前先查磁盘：若该 lane 已被手动收尾（supervisor 标记 merged/failed、
-        // 代码已并入分支），则跳过不覆盖——避免看门狗把已完成的 lane 误标 failed
-        // （2026-08-14 JM-334 实测：手动收尾后 90 分钟超时仍覆盖为 failed）。
-        try {
-          const disk = readBatchState(config.stateRoot, ctx.batchId)
-          const dl = disk?.lanes?.find((x) => x.taskId === spec.task.id)
-          if (dl && (dl.phase === 'merged' || dl.phase === 'failed')) {
-            laneLog(lane, `watchdog skipped (lane already ${dl.phase} on disk — manual finalize)`)
-            resolve({ exitCode: 0, text: '', error: undefined })
-            return
-          }
-        } catch {
-          // 磁盘不可读时按常规超时处理
-        }
-        // 先 abort 僵尸 worker，再以 failed 收尾（worktree/分支保留供排查）。
-        try {
-          config.host.abort?.(spec.lane)
-        } catch {
-          // best-effort
-        }
-        laneLog(lane, `lane timeout after ${timeoutMin} min (watchdog)`)
-        resolve({ exitCode: 1, text: '', error: `lane timeout after ${timeoutMin} min（worker 无完成事件，看门狗强制结束；检查点保留在 taskswarm/${spec.task.id} 分支）` })
-      }, timeoutMs)
+    // per-lane 停止信号：stopLane(taskId) resolve → 立即中断该 lane 的 worker（主动停卡住 lane）。
+    let resolveStop: (() => void) | undefined
+    const stopNow = new Promise<WorkerResult>((resolve) => {
+      resolveStop = () => resolve({ exitCode: 1, text: '', error: 'stopped by operator' } satisfies WorkerResult)
     })
+    ctx.laneStopResolvers.set(spec.lane, () => resolveStop?.())
     try {
-      return await Promise.race([config.host.spawn(spec), timeout, ...(abortNow ? [abortNow] : [])])
+      const timeoutMin = config.laneTimeoutMinutes ?? 0
+      if (!(timeoutMin > 0)) {
+        return Promise.race([config.host.spawn(spec), stopNow, ...(abortNow ? [abortNow] : [])])
+      }
+
+      const timeoutMs = timeoutMin * 60_000
+      let timer: NodeJS.Timeout | undefined
+      const timeout = new Promise<WorkerResult>((resolve) => {
+        timer = setTimeout(() => {
+          // 看门狗触发前先查磁盘：若该 lane 已被手动收尾（supervisor 标记 merged/failed、
+          // 代码已并入分支），则跳过不覆盖——避免看门狗把已完成的 lane 误标 failed
+          // （2026-08-14 JM-334 实测：手动收尾后 90 分钟超时仍覆盖为 failed）。
+          try {
+            const disk = readBatchState(config.stateRoot, ctx.batchId)
+            const dl = disk?.lanes?.find((x) => x.taskId === spec.task.id)
+            if (dl && (dl.phase === 'merged' || dl.phase === 'failed')) {
+              laneLog(lane, `watchdog skipped (lane already ${dl.phase} on disk — manual finalize)`)
+              resolve({ exitCode: 0, text: '', error: undefined })
+              return
+            }
+          } catch {
+            // 磁盘不可读时按常规超时处理
+          }
+          // 先 abort 僵尸 worker，再以 failed 收尾（worktree/分支保留供排查）。
+          try {
+            config.host.abort?.(spec.lane)
+          } catch {
+            // best-effort
+          }
+          laneLog(lane, `lane timeout after ${timeoutMin} min (watchdog)`)
+          resolve({ exitCode: 1, text: '', error: `lane timeout after ${timeoutMin} min（worker 无完成事件，看门狗强制结束；检查点保留在 taskswarm/${spec.task.id} 分支）` })
+        }, timeoutMs)
+      })
+      return await Promise.race([config.host.spawn(spec), timeout, stopNow, ...(abortNow ? [abortNow] : [])])
     } finally {
-      if (timer) clearTimeout(timer)
+      ctx.laneStopResolvers.delete(spec.lane)
+      ctx.laneStopWaiters.delete(spec.lane)
     }
   }
 
@@ -595,20 +638,30 @@ export class TaskSwarmEngine {
     }
     // 引擎重启后 active 为空：从磁盘恢复未完成批次续跑（方案 A，KI-007）。
     // 已 merged/failed 的 lane 由 runLane 跳过；剩余 pending 任务按新 wave plan 继续。
-    return this.recoverPendingBatch()
+    // pauseOnLaneFailure 暂停的批次：跳过 failed lane（丢弃失败工作），避免重跑再失败死循环。
+    const skipFailed = this.pausedOnFailureBatch === latestBatch(this.config.stateRoot)?.id
+    const ok = this.recoverPendingBatch(skipFailed)
+    if (ok) this.pausedOnFailureBatch = null
+    return ok
   }
 
   /**
    * 方案 A（KI-007）：引擎重启/崩溃后，把磁盘上 phase ∈ running/planning/paused 的
    * 批次重新挂回执行（跳过已完成 lane）。这样失联/重启不再需要手动开新批次重排剩余任务。
+   * @param skipFailed 为 true 时跳过已 failed 的 lane（pauseOnLaneFailure 暂停后 resume =
+   *   丢弃失败工作继续；false = 崩溃恢复，failed lane 需重跑续接）。
    */
-  private recoverPendingBatch(): boolean {
+  private recoverPendingBatch(skipFailed = false): boolean {
     const state = latestBatch(this.config.stateRoot)
     if (!state) return false
     if (state.phase !== 'running' && state.phase !== 'planning' && state.phase !== 'paused') return false
     if (this.active.has(state.id)) return false
     // select() 默认排除已 done 任务（.DONE 标记）→ wave plan 只含剩余任务。
-    const selected = this.select(state.scope)
+    let selected = this.select(state.scope)
+    if (skipFailed) {
+      const failedIds = new Set(state.lanes.filter((l) => l.phase === 'failed').map((l) => l.taskId))
+      selected = selected.filter((t) => !failedIds.has(t.task.id))
+    }
     if (selected.length === 0) return false
     const waves = buildWaves(selected.map((t) => t.task))
     const paths = worktreePaths(this.config.repoRoot, this.config.stateRoot)
@@ -639,6 +692,38 @@ export class TaskSwarmEngine {
   integrate(): { ok: boolean; message: string } {
     const result = runGit(['merge', '--no-edit', 'taskswarm/orch'], this.config.repoRoot)
     return result.ok ? { ok: true, message: result.stdout } : { ok: false, message: result.stderr }
+  }
+
+  /**
+   * 主动停掉指定 lane（/tswarm-stop-lane）：中断其 worker（不等看门狗），标记 failed，
+   * worktree/分支保留供排查或抢救。同波其他 lane 不受影响；若本波出现 failed 且
+   * pauseOnLaneFailure 开启，该波跑完后批次自动暂停等处置。
+   * @returns { ok, message } —— ok=false 表示找不到该 taskId 或不在运行中。
+   */
+  stopLane(taskId: string): { ok: boolean; message: string } {
+    const ctx = this.activeContext()
+    if (!ctx) return { ok: false, message: 'no running batch' }
+    const state = readBatchState(this.config.stateRoot, ctx.batchId)
+    const lane = state?.lanes.find((l) => l.taskId === taskId)
+    if (!lane) return { ok: false, message: `task ${taskId} not found in batch ${ctx.batchId}` }
+    if (lane.phase !== 'running' && lane.phase !== 'review') {
+      return { ok: false, message: `lane ${lane.lane} (${taskId}) is ${lane.phase}, not running` }
+    }
+    // 先 abort worker 进程/agent，再 resolve per-lane 停止信号让 runLaneWorker 快速收尾。
+    try {
+      ctx.config.host.abort?.(lane.lane)
+    } catch {
+      // best-effort
+    }
+    const resolve = ctx.laneStopResolvers.get(lane.lane)
+    if (resolve) resolve()
+    laneLog(lane, 'stopped by operator (tswarm-stop-lane)')
+    // 标记磁盘 failed（runLane 的收尾会再写一次，这里先落盘保证即时可见）。
+    lane.phase = 'failed'
+    lane.error = 'stopped by operator'
+    lane.endedAt = new Date().toISOString()
+    writeBatchState(state!)
+    return { ok: true, message: `lane ${lane.lane} (${taskId}) stopped; worktree/checkpoints preserved` }
   }
 
   private activeContext(): RunContext | undefined {

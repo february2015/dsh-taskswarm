@@ -346,3 +346,124 @@ test('worker mission enforces incremental advance rules (B2)', async () => {
   assert.match(mission, /Do NOT edit STATUS\.md by hand/i, 'mission bans hand-editing STATUS.md')
   assert.match(mission, /Only call `done` when ALL Completion Criteria/i, 'mission gates done on completion criteria')
 })
+
+/** Worker that fails a designated task (simulates a stuck/broken lane). */
+class SelectiveFailHost {
+  constructor(failTaskIds = []) {
+    this.kind = 'fake'
+    this.failTaskIds = new Set(failTaskIds)
+  }
+  async spawn(spec) {
+    if (this.failTaskIds.has(spec.task.id)) {
+      // Simulate a crashed/stuck worker: return non-zero (failed) without completing.
+      return { exitCode: 1, text: '', error: 'worker crashed (simulated)' }
+    }
+    writeFileSync(join(spec.worktree, `${spec.task.id}.txt`), `${spec.task.id} done\n`, 'utf-8')
+    checkpointCommit(spec.worktree, `feat(${spec.task.id})`)
+    markTaskDone(spec.task.folder)
+    return { exitCode: 0, text: `${spec.task.id} complete` }
+  }
+  abort() {}
+}
+
+test('a failed lane pauses the batch after the wave instead of rolling into the next (pauseOnLaneFailure)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  // Wave 1: J-001 ok + J-002 broken (parallel). Wave 2: K-003 depends on J-001.
+  writeTask(join(tasksRoot, 'J-001-juliet'), 'J-001', 'Juliet', [])
+  writeTask(join(tasksRoot, 'J-002-kilo'), 'J-002', 'Kilo', [])
+  writeTask(join(tasksRoot, 'K-003-lima'), 'K-003', 'Lima', ['J-001'])
+  const stateRoot = join(repo, '.taskswarm')
+  const engine = new TaskSwarmEngine({
+    repoRoot: repo, tasksRoot, stateRoot,
+    host: new SelectiveFailHost(['J-002']),
+  })
+
+  engine.run('all')
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.ok(state, 'batch state exists')
+  // pauseOnLaneFailure (default true): the failed lane pauses the batch after wave 1;
+  // wave 2 (K-003) must NOT run on its own.
+  assert.equal(state.phase, 'paused', `expected paused after failed lane, got ${state.phase}`)
+  const failedLane = state.lanes.find((l) => l.taskId === 'J-002')
+  assert.ok(failedLane, 'failed lane recorded')
+  assert.equal(failedLane.phase, 'failed', 'broken lane marked failed')
+  const kLane = state.lanes.find((l) => l.taskId === 'K-003')
+  assert.ok(kLane && kLane.phase !== 'merged', 'wave-2 lane did not run (batch paused)')
+
+  // Disposition: operator decides to drop the failed lane and continue → resume.
+  assert.equal(engine.resume(), true, 'resume after disposition')
+  const deadline2 = Date.now() + 30_000
+  let state2 = engine.status()
+  while (state2 && (state2.phase === 'running' || state2.phase === 'planning')) {
+    if (Date.now() > deadline2) break
+    await sleep(100)
+    state2 = engine.status()
+  }
+  assert.equal(state2.phase, 'complete', `expected complete after resume, got ${state2.phase}`)
+  const kAfter = state2.lanes.find((l) => l.taskId === 'K-003')
+  assert.equal(kAfter.phase, 'merged', 'wave-2 lane merged after resume')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('pauseOnLaneFailure=false lets the batch continue past a failed lane', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'M-001-mike'), 'M-001', 'Mike', [])
+  writeTask(join(tasksRoot, 'M-002-nov'), 'M-002', 'November', [])
+  const stateRoot = join(repo, '.taskswarm')
+  const engine = new TaskSwarmEngine({
+    repoRoot: repo, tasksRoot, stateRoot,
+    host: new SelectiveFailHost(['M-002']), pauseOnLaneFailure: false,
+  })
+
+  engine.run('all')
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.equal(state.phase, 'complete', `with pauseOnLaneFailure=false the batch completes, got ${state.phase}`)
+  assert.equal(state.lanes.find((l) => l.taskId === 'M-002').phase, 'failed')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('stopLane kills one lane and pauses the batch after the wave', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'N-001-niner'), 'N-001', 'Niner', [])
+  writeTask(join(tasksRoot, 'O-002-oscar'), 'O-002', 'Oscar', [])
+  const stateRoot = join(repo, '.taskswarm')
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host: new SlowWorkerHost() })
+
+  engine.run('all')
+  await sleep(200) // let lanes start (SlowWorkerHost takes 800ms)
+  // Stop O-002 while it is running.
+  const stopped = engine.stopLane('O-002')
+  assert.equal(stopped.ok, true, `stopLane succeeds: ${stopped.message}`)
+
+  const deadline = Date.now() + 30_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.ok(state, 'state exists')
+  assert.equal(state.phase, 'paused', `batch paused after stopped lane, got ${state.phase}`)
+  const stoppedLane = state.lanes.find((l) => l.taskId === 'O-002')
+  assert.equal(stoppedLane.phase, 'failed', 'stopped lane marked failed')
+  assert.match(stoppedLane.error || '', /stopped/, 'error mentions stopped by operator')
+
+  rmSync(repo, { recursive: true, force: true })
+})
