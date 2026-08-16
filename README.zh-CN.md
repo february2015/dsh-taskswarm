@@ -154,7 +154,7 @@ const taskswarm = ctx.get('taskswarm')
 const { batches } = taskswarm.getSnapshot()
 ```
 
-每个 batch 都带有 `ownerSessionId`，所以像 [dsh-dingo](https://github.com/february2015/dsh-dingo) 这样的插件可以在主对话卡片上显示“等待蜂群”状态，只要批次还在跑。
+每个 batch 都带有 `ownerSessionId`，所以像 [dsh-dingo](https://github.com/february2015/dsh-dingo) 这样的插件可以在主对话卡片上显示“等待后台/子任务/蜂群”状态，只要批次还在跑。
 
 这样你就能在 dsh-dingo 的卡片面板里直接看到：
 

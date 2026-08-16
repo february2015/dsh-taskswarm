@@ -162,7 +162,7 @@ const taskswarm = ctx.get('taskswarm')
 const { batches } = taskswarm.getSnapshot()
 ```
 
-Each batch includes `ownerSessionId`, so plugins like [dsh-dingo](https://github.com/february2015/dsh-dingo) can show a **“waiting for swarm”** state on the main session card while the batch is still running.
+Each batch includes `ownerSessionId`, so plugins like [dsh-dingo](https://github.com/february2015/dsh-dingo) can show a **“waiting for background/subtasks/swarm”** state on the main session card while the batch is still running.
 
 This makes it possible to see “main conversation finished, but the swarm is still working” directly in the dsh-dingo card panel.
 
