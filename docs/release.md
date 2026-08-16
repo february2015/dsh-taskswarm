@@ -95,11 +95,30 @@ Then restart `dsh web` for the new version to take effect.
 
 ## Security notes
 
-- Use the least-privilege token: scoped to `dsh-taskswarm` only, Read and write, bypass 2FA.
+- **Two tokens, different rules** (verified 2026-08-17):
+  - **Publish**: Granular Access Token with **2FA bypass** (no OTP prompt on publish).
+  - **Unpublish (delete a version)**: npm security policy **forbids bypass-2FA tokens
+    from deleting versions** — `E403 Granular access tokens that bypass two-factor
+    authentication may not perform this action`. Use a **classic token (no 2FA bypass)**;
+    with 2FA enabled npm will ask for a one-time code:
+    ```bash
+    npm unpublish dsh-taskswarm@0.2.2          # enter the OTP when prompted
+    # or supply it up front: npm unpublish dsh-taskswarm@0.2.2 --otp=<6-digit code>
+    ```
+  - `~/.npmrc` currently holds the classic token (for unpublish). If publish fails with
+    `Two-factor authentication ... is required`, temporarily switch back to the bypass
+    token or go through OTP.
+- Use the least-privilege token: scoped to `dsh-taskswarm` only, Read and write.
 - The token is stored in `~/.npmrc` — treat it like a password.
 - If a token leaks or you stop using it: revoke it at
   https://www.npmjs.com/settings/<user>/tokens and remove it locally with
   `npm config delete //registry.npmjs.org/:_authToken`.
+- **72-hour unpublish window**: npm only allows deleting a version within **72 hours**
+  of publishing; older versions can only be `npm deprecate`d (marked deprecated),
+  never truly removed. Bulk-delete history:
+  ```bash
+  for v in 0.2.1 0.2.2 ... 0.2.37; do npm unpublish dsh-taskswarm@$v; done
+  ```
 
 ## Release checklist
 

@@ -89,10 +89,28 @@ dsh plugin --profile web add dsh-taskswarm@0.2.10   # 显式版本一定重新�
 
 ## 安全注意事项
 
-- token 最小权限：只给 `dsh-taskswarm`、Read and write、bypass 2FA。
-- token 存在 `~/.npmrc`，按密码对待。
-- token 泄露或不再使用：去 https://www.npmjs.com/settings/<用户名>/tokens revoke，
-  本地用 `npm config delete //registry.npmjs.org/:_authToken` 清除。
+- **两个 token 都要**（2026-08-17 实测，发布/删除对 token 要求不同）：
+  - **发布（publish）**：Granular Access Token + **bypass 2FA**（勾选后发布不弹验证码）。
+  - **删除版本（unpublish）**：npm 安全策略**禁止 bypass 2FA 的 token 执行删除**——
+    `E403 Granular access tokens that bypass two-factor authentication may not
+    perform this action`。必须用**普通 classic token（不 bypass 2FA）**，且账号 2FA
+    开启时执行时会要求输入手机上的一次性验证码：
+    ```bash
+    npm unpublish dsh-taskswarm@0.2.2          # 提示输入 OTP 时填验证码
+    # 或预先提供：npm unpublish dsh-taskswarm@0.2.2 --otp=<6位验证码>
+    ```
+  - 本机 `~/.npmrc` 当前存的是 **classic token**（用于 unpublish）；发布时若报
+    `Two-factor authentication ... is required`，临时切回 bypass token 或走 OTP。
+- token 最小权限：只给 `dsh-taskswarm`、Read and write。
+- token 存在 `~/.npmrc`，按密码对待；泄露即去
+  https://www.npmjs.com/settings/<用户名>/tokens revoke，并
+  `npm config delete //registry.npmjs.org/:_authToken` 清除。
+- **删除版本的 72 小时窗口**：npm 只允许删除发布后 **72 小时内**的版本；
+  超时的版本只能 `npm deprecate`（标记弃用），无法真正删除。
+  批量删除历史版本：
+  ```bash
+  for v in 0.2.1 0.2.2 ... 0.2.37; do npm unpublish dsh-taskswarm@$v; done
+  ```
 
 ## 发布检查清单
 
