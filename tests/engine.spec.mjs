@@ -680,3 +680,45 @@ test('crash recovery: a fresh engine instance resumes the batch and keeps the wa
   await sleep(1200)
   rmSync(repo, { recursive: true, force: true })
 })
+
+test('resume after restart rebinds the batch owner to the new conversation (2026-08-17)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'AB-001-echo'), 'AB-001', 'Echo', [])
+  writeTask(join(tasksRoot, 'AC-002-foxtrot'), 'AC-002', 'Foxtrot', ['AB-001'])
+  const stateRoot = join(repo, '.taskswarm')
+
+  // 构造崩溃现场（等价于进程死在 Wave 1 完成后）：磁盘 phase=paused、Wave 1 merged、Wave 2 pending。
+  writeBatchState({
+    id: 'b-rebind', repoRoot: repo, tasksRoot, stateRoot, phase: 'paused',
+    scope: 'all', startedAt: new Date().toISOString(), waves: 2,
+    wavePlan: [['AB-001'], ['AC-002']],
+    lanes: [
+      { lane: 1, taskId: 'AB-001', phase: 'merged', wave: 1, log: ['merged'] },
+      { lane: 2, taskId: 'AC-002', phase: 'pending', wave: 2, log: [] },
+    ],
+  })
+
+  // 新实例（模拟重启）：新对话（session B）resume → owner 应重绑到 session B。
+  const hostB = { kind: 'fake', async spawn(spec) { writeFileSync(join(spec.worktree, spec.task.id + '.txt'), 'ok\n'); checkpointCommit(spec.worktree, 'feat'); markTaskDone(spec.task.folder); return { exitCode: 0, text: 'ok' } }, abort() {} }
+  const sessionB = { id: 'session-B' }
+  const engine2 = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host: hostB })
+  assert.equal(engine2.resume(sessionB), true, 'fresh engine resumes with new owner')
+
+  // 断言：activeBatchOwnerAgent 现在是 session B（而非 undefined）。
+  const owner = engine2.activeBatchOwnerAgent()
+  assert.ok(owner, 'batch has an owner after resume')
+  assert.equal(owner && owner.id, 'session-B', 'owner rebound to the new conversation')
+
+  const deadline = Date.now() + 20_000
+  let state = engine2.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine2.status()
+  }
+  assert.equal(state.phase, 'complete', `batch completes, got ${state.phase}`)
+
+  await sleep(500)
+  rmSync(repo, { recursive: true, force: true })
+})

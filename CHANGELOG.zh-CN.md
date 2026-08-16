@@ -5,6 +5,28 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.34] - 2026-08-17
+
+### 修复
+
+- **resume 会把批次 owner 重绑到发起恢复的会话** —— 引擎重启后，从**新对话**继续暂停批次
+  （`/tswarm-resume` 或 supervisor `resume`）时，owner 设为该新对话，后续事件与定时汇报路由到它，
+  而非插件 apply 时捕获的旧 agent。此前 owner 只在 `run()` 时设置，重启后为 undefined，通知会
+  回退到可能过期的 apply 时 agent。
+- **done 计数不再把 failed/skipped 当"完成"** —— `completedLanes` 与 `compactBatchStatus` 的
+  完成数只算 `merged`；failed 单独显示（如 `已完成 0/6，1 失败`）。此前 failed 计入 done，
+  "1/6 lanes done" 实为 1 失败 5 未开始，误导进度（JM-406 场景核实）。
+
+### 撤回
+
+- 撤回"步骤全勾 → exit 1 视为完成"的启发式（0.2.33 草稿）：checkbox 信号不可靠（worker 可手改
+  STATUS.md 绕过 advance），worker exit 1 仍判 failed + 保留现场由 supervisor 判断——JM-406
+  （工作真实完成、收尾 API 错误）正是经手动收尾正确处理。
+
+### 测试
+
+- 新增：重启后 resume 把 owner 重绑到新会话（经 `activeBatchOwnerAgent` 验证）。全量 49/49。
+
 ## [0.2.33] - 2026-08-17
 
 ### 修复
@@ -419,6 +441,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.34]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.33...v0.2.34
 [0.2.33]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.32...v0.2.33
 [0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31

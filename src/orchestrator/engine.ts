@@ -631,10 +631,12 @@ export class TaskSwarmEngine {
     return true
   }
 
-  /** Resume a paused batch. */
-  resume(): boolean {
+  /** Resume a paused batch. owner = 发起 resume 的会话 agent（重启后换新对话续跑时，
+   *  通知应指向新对话而非 apply 时捕获的旧 supervisorAgent——2026-08-17 修复）。 */
+  resume(owner?: unknown): boolean {
     const ctx = this.activeContext()
     if (ctx) {
+      if (owner) this.batchOwners.set(ctx.batchId, owner)
       ctx.paused = false
       const state = readBatchState(this.config.stateRoot, ctx.batchId)
       if (state) {
@@ -647,7 +649,7 @@ export class TaskSwarmEngine {
     // 已 merged/failed 的 lane 由 runLane 跳过；剩余 pending 任务按新 wave plan 继续。
     // pauseOnLaneFailure 暂停的批次：跳过 failed lane（丢弃失败工作），避免重跑再失败死循环。
     const skipFailed = this.pausedOnFailureBatch === latestBatch(this.config.stateRoot)?.id
-    const ok = this.recoverPendingBatch(skipFailed)
+    const ok = this.recoverPendingBatch(skipFailed, owner)
     if (ok) this.pausedOnFailureBatch = null
     return ok
   }
@@ -658,11 +660,14 @@ export class TaskSwarmEngine {
    * @param skipFailed 为 true 时跳过已 failed 的 lane（pauseOnLaneFailure 暂停后 resume =
    *   丢弃失败工作继续；false = 崩溃恢复，failed lane 需重跑续接）。
    */
-  private recoverPendingBatch(skipFailed = false): boolean {
+  private recoverPendingBatch(skipFailed = false, owner?: unknown): boolean {
     const state = latestBatch(this.config.stateRoot)
     if (!state) return false
     if (state.phase !== 'running' && state.phase !== 'planning' && state.phase !== 'paused') return false
     if (this.active.has(state.id)) return false
+    // 重启后恢复：把发起 resume 的会话设为 owner——后续事件/定时汇报路由到它（新对话），
+    // 而不是 apply 时捕获的旧 supervisorAgent（2026-08-17 修复）。
+    if (owner) this.batchOwners.set(state.id, owner)
     // 2026-08-16：wave plan 是批次启动时定死的（持久化在 state.wavePlan），恢复时**原样复用**——
     // 已完成 wave 的任务由 runLane 的 "merged 跳过" 处理，绝不中途重算 wave 结构
     // （旧实现 select 排除 done 后重新 buildWaves，wave 数变化 + lane.wave 错位）。

@@ -398,17 +398,22 @@ export function laneProgress(lane: LaneState, taskFolders: Map<string, string>):
  * 去掉完整时间戳/scope 冗余与未开始波次的 lane。
  */
 export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'): string {
-  const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped').length
+  // 2026-08-17 修复：done 只算 merged（真正完成）；failed 单独在行首展示，避免
+  // "1/6 done" 实为 1 失败 5 未开始的误导。
+  const merged = state.lanes.filter((l) => l.phase === 'merged').length
+  const failed = state.lanes.filter((l) => l.phase === 'failed').length
+  const done = merged
   const wavePlan = recomputeWavePlan(state)
   const waveIdx = currentWaveIndex(wavePlan, state.lanes)
   const phaseNames: Record<string, string> = {
     running: '运行中', review: '评审中', conflict: '冲突待处置', merged: '已合并',
     failed: '失败', pending: '等待中', skipped: '已跳过',
   }
+  const failedNote = failed > 0 ? (locale === 'zh-CN' ? `，${failed} 失败` : `, ${failed} failed`) : ''
   const lines = [
     locale === 'zh-CN'
-      ? `批次 ${state.id} — ${state.phase}（已完成 ${done}/${state.lanes.length}）· 波次 ${waveIdx + 1}/${wavePlan.length}`
-      : `Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} done) · Wave ${waveIdx + 1}/${wavePlan.length}`,
+      ? `批次 ${state.id} — ${state.phase}（已完成 ${done}/${state.lanes.length}${failedNote}）· 波次 ${waveIdx + 1}/${wavePlan.length}`
+      : `Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} done${failedNote}) · Wave ${waveIdx + 1}/${wavePlan.length}`,
   ]
   const current = new Set(wavePlan[waveIdx] ?? [])
   const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
@@ -612,7 +617,8 @@ export function registerSupervisor(
           return { ok: r.ok, text: r.ok ? `Integrated: ${r.message}` : `Integration failed: ${r.message}` }
         }
         case 'resume': {
-          const ok = engine.resume()
+          // 传入调用者 agent（toolOwner）：重启后新对话续跑时，通知指向新对话而非旧 supervisorAgent。
+          const ok = engine.resume(toolOwner)
           // 引擎重启后 resume 会从磁盘恢复未完成批次续跑（方案 A，KI-007）。
           return { ok, text: ok ? 'Batch resumed.' : 'No paused batch or recoverable batch to resume.' }
         }

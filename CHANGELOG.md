@@ -5,6 +5,34 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.34] - 2026-08-17
+
+### Fixed
+
+- **Resume rebinds the batch owner to the resuming conversation** — after an engine restart, when
+  you continue a paused batch from a *new* conversation (`/tswarm-resume` or supervisor
+  `resume`), the batch owner is now set to that new conversation, so events and periodic reports
+  route to it instead of the agent captured at plugin-apply time. Previously the owner was only
+  set at `run()`; after a restart it was undefined, so notifications fell back to a possibly
+  stale apply-time agent.
+- **Done count no longer treats failed/skipped as "done"** — `completedLanes` and
+  `compactBatchStatus` now count only `merged` as done, and show failures separately
+  (e.g. `0/6 done, 1 failed`). Previously a failed lane inflated the done count, so "1/6 lanes
+  done" could actually mean 1 failed + 5 not started (verified on the JM-406 case).
+
+### Reverted
+
+- Reverted the "all steps checked → treat exit 1 as complete" heuristic (0.2.33-draft): the
+  checkbox signal is not reliable (workers can hand-edit STATUS.md, bypassing `advance`), so a
+  worker that exits 1 stays `failed` with the scene preserved for supervisor judgment — exactly
+  how the JM-406 case (real work done, final API error) was handled correctly via manual
+  finalize.
+
+### Tests
+
+- New: resume-after-restart rebinds the owner to the new conversation (verified via
+  `activeBatchOwnerAgent`). Full suite: 49/49.
+
 ## [0.2.33] - 2026-08-17
 
 ### Fixed
@@ -482,6 +510,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.34]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.33...v0.2.34
 [0.2.33]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.32...v0.2.33
 [0.2.32]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.31...v0.2.32
 [0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31

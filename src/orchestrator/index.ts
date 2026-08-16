@@ -440,7 +440,8 @@ export function apply(ctx: Context, config: Config): void {
   registerCommand(['tswarm-resume', 'orch-resume'], {
     description: 'resume a paused TaskSwarm batch',
     handler: (invocation) => withEngine(invocation, (ref) =>
-      ref.engine.resume() ? ok('Batch resumed.') : err('No paused batch to resume.')),
+      // 传入发起 resume 的会话：重启后换新对话续跑时，通知指向新对话（2026-08-17 修复）。
+      ref.engine.resume(invocation.agent) ? ok('Batch resumed.') : err('No paused batch to resume.')),
   })
 
   registerCommand(['tswarm-abort', 'orch-abort'], {

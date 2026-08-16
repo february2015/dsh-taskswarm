@@ -131,5 +131,7 @@ export function formatBatchStatus(state: BatchState): string {
 }
 
 function completedLanes(state: BatchState): number {
-  return state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped').length
+  // 2026-08-17 修复：只有 merged 才算"完成"——failed/skipped 是终结态但不是完成，
+  // 计入会误导（如"1/6 done"实为 1 失败 5 未开始）。失败数由调用方另行展示。
+  return state.lanes.filter((l) => l.phase === 'merged').length
 }
