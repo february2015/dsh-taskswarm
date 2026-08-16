@@ -7,6 +7,7 @@ test('orchestrator plugin registers the /orch-family commands', () => {
   const registered = []
   const ctx = {
     get: () => undefined,
+    provide: () => undefined,
     commands: { register: (def) => registered.push(def.name) },
   }
   apply(ctx, {})

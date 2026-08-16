@@ -4,7 +4,7 @@ import { mkdtempSync, writeFileSync, mkdirSync, rmSync, existsSync, readFileSync
 import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { sanitizeNameComponent, resolveRepoSlug } from '../lib/core/naming.js'
-import { parsePrompt, ensureStatusFile, advanceStep, markTaskRunning, markTaskDone, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
+import { parsePrompt, ensureStatusFile, ensureStatusStructure, advanceStep, markTaskRunning, markTaskDone, setTaskStatus, appendExecutionLog, parseStatusFile, explainParseFailure, checkPacketQuality } from '../lib/core/task.js'
 import { scanTasks, scanTaskFailures, buildWaves } from '../lib/core/discover.js'
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
 import { runGit } from '../lib/core/git.js'
@@ -130,6 +130,115 @@ test('parseStatusFile reports checked/total checkbox counts (KI-008)', () => {
   info = parseStatusFile(dir)
   assert.equal(info.checked, 1)
   assert.equal(info.total, 3)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('ensureStatusStructure rebuilds missing Step sections from PROMPT', () => {
+  const root = tmp()
+  const dir = join(root, 'TASKSWARM-005-quux')
+  writeTask(dir, 'TASKSWARM-005', 'Quux', [], [
+    { title: 'Work', items: ['a', 'b', 'c'] },
+  ])
+  const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
+  // 模拟任务包创建方只写了 Status 头 + Execution Log、缺 Step 段（手工/其它 AI 创建）。
+  const logLine = '| 2026-08-16 | Created | pending |'
+  writeFileSync(join(dir, 'STATUS.md'), [
+    `# TASKSWARM-005: Quux — Status`,
+    '**Status:** 🟢 In Progress',
+    '**Current Step:** Not Started',
+    '',
+    '---',
+    '',
+    '## Execution Log',
+    '',
+    '| Timestamp | Action | Outcome |',
+    '|---|---|---|',
+    logLine,
+  ].join('\n') + '\n', 'utf-8')
+
+  // 补建前：无 Step 段。
+  assert.equal(/### Step \d+: /.test(readFileSync(join(dir, 'STATUS.md'), 'utf-8')), false)
+
+  // ensureStatusStructure 直接补建：Step 段从 PROMPT 注入，Execution Log 行保留。
+  assert.equal(ensureStatusStructure(task), true)
+  let content = readFileSync(join(dir, 'STATUS.md'), 'utf-8')
+  assert.match(content, /### Step 0: Work/, 'Step 0 section rebuilt')
+  assert.equal((content.match(/- \[ \]/g) || []).length, 3, '3 unchecked checkboxes from PROMPT')
+  assert.ok(content.includes(logLine), 'existing Execution Log row preserved (inject, not rewrite)')
+  assert.equal(ensureStatusStructure(task), false, 'idempotent: no rebuild when Step sections exist')
+
+  // 已有 Step 段时 advance 直接勾选。
+  const first = advanceStep(task, 0)
+  assert.equal(first.item, 'a')
+  assert.equal(parseStatusFile(dir).checked, 1)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('advanceStep auto-rebuilds a missing Step section before ticking (defense-in-depth)', () => {
+  const root = tmp()
+  const dir = join(root, 'TASKSWARM-006-quuz')
+  writeTask(dir, 'TASKSWARM-006', 'Quuz', [], [
+    { title: 'Work', items: ['a', 'b', 'c'] },
+  ])
+  const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
+  // 只写 Status 头，连 Execution Log 都没有——最残缺的情况。
+  writeFileSync(join(dir, 'STATUS.md'), [
+    `# TASKSWARM-006: Quuz — Status`,
+    '**Status:** 🟢 In Progress',
+    '**Current Step:** Not Started',
+    '',
+    '---',
+  ].join('\n') + '\n', 'utf-8')
+
+  // advance 自带防御：缺 Step 段时先补建再勾选（不再静默失败）。
+  const first = advanceStep(task, 0)
+  assert.equal(first.item, 'a', 'advance auto-rebuilds missing Step section and ticks')
+  assert.equal(parseStatusFile(dir).checked, 1)
+  assert.equal(parseStatusFile(dir).total, 3)
+  rmSync(root, { recursive: true, force: true })
+})
+
+test('all STATUS.md write entry points rebuild missing Step sections (write-path guard)', () => {
+  const root = tmp()
+  const dir = join(root, 'TASKSWARM-007-quve')
+  writeTask(dir, 'TASKSWARM-007', 'Quve', [], [
+    { title: 'Work', items: ['a', 'b'] },
+  ])
+  const task = parsePrompt(join(dir, 'PROMPT.md'), dir, 'tasks')
+  const writeBare = () => writeFileSync(join(dir, 'STATUS.md'), [
+    `# TASKSWARM-007: Quve — Status`,
+    '**Status:** 🔵 Ready for Execution',
+    '**Current Step:** Not Started',
+    '',
+    '---',
+  ].join('\n') + '\n', 'utf-8')
+
+  // 1) setTaskStatus（任务状态更新）→ 补建。
+  writeBare()
+  setTaskStatus(dir, 'running')
+  assert.equal(parseStatusFile(dir).total, 2, 'setTaskStatus ensures structure')
+
+  // 2) markTaskDone（任务成功/完成）→ 补建。
+  writeBare()
+  markTaskDone(dir)
+  assert.equal(parseStatusFile(dir).total, 2, 'markTaskDone ensures structure')
+  assert.equal(parseStatusFile(dir).status, 'done')
+
+  // 3) markTaskRunning（lane 启动/状态变更）→ 补建。
+  writeBare()
+  markTaskRunning(dir, task)
+  assert.equal(parseStatusFile(dir).total, 2, 'markTaskRunning ensures structure')
+
+  // 4) appendExecutionLog（任务日志追加）→ 补建。
+  writeBare()
+  appendExecutionLog(dir, 'Lane started', 'lane 1')
+  assert.equal(parseStatusFile(dir).total, 2, 'appendExecutionLog ensures structure')
+
+  // 5) advanceStep（任务推进）→ 补建（前一测试已覆盖，这里只确认成功勾选）。
+  writeBare()
+  const r = advanceStep(task, 0)
+  assert.equal(r.item, 'a')
+
   rmSync(root, { recursive: true, force: true })
 })
 

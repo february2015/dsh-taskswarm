@@ -99,6 +99,7 @@ function mergeV2LaneSnapshot(legacyLs, v2snap) {
     if (w.elapsedMs != null) base.workerElapsed = w.elapsedMs;
     if (w.contextPct != null) base.workerContextPct = w.contextPct;
     if (w.toolCalls != null) base.workerToolCount = w.toolCalls;
+    if (w.stepCount != null) base.workerStepCount = w.stepCount;
     if (w.lastTool) base.workerLastTool = w.lastTool;
     if (w.costUsd != null) base.workerCostUsd = w.costUsd;
     if (w.inputTokens != null) base.workerInputTokens = w.inputTokens;
@@ -1043,7 +1044,11 @@ function renderLanesTasks(batch, sessions) {
         const ctx = ls.workerContextPct ? `${Math.round(ls.workerContextPct)}%` : "";
         const lastTool = reviewerActive ? "[awaiting review]" : (ls.workerLastTool || "");
         const tokenStr = tokenSummaryFromLaneState(ls);
+        // 步数徽章：worker 从任务开始到现在累计执行的动作步数（会话事件 step 计数，
+        // 每次工具调用/回复 +1）。复杂任务后台跑很多步时这里能看到数字在涨——前台可感知"还在跑"。
+        const stepCount = ls.workerStepCount ? Number(ls.workerStepCount).toLocaleString() : "";
         workerHtml = `<div class="worker-stats">`;
+        if (stepCount) workerHtml += `<span class="worker-stat worker-step-count" title="Steps executed since task start (tool calls + replies)">⚙ ${stepCount} steps</span>`;
         workerHtml += `<span class="worker-stat" title="Worker elapsed">⏱ ${elapsed}</span>`;
         workerHtml += `<span class="worker-stat" title="Tool calls">🔧 ${tools}</span>`;
         if (ctx) workerHtml += `<span class="worker-stat" title="Context window used">📊 ${ctx}</span>`;
@@ -1054,7 +1059,9 @@ function renderLanesTasks(batch, sessions) {
       } else if (!ls && tel && task.status === "running") {
         // Running task with telemetry but no lane-state yet (early startup)
         const lastTool = tel.lastTool || "";
+        const stepCount = (sd && sd.total) ? `${sd.checked}/${sd.total}` : "";
         workerHtml = `<div class="worker-stats">`;
+        if (stepCount) workerHtml += `<span class="worker-stat worker-step-count" title="Checkboxes completed / total">⚙ ${stepCount}</span>`;
         if (lastTool) workerHtml += `<span class="worker-stat worker-last-tool" title="Last tool call">${escapeHtml(lastTool)}</span>`;
         workerHtml += telemBadges;
         workerHtml += `</div>`;

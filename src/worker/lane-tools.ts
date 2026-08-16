@@ -6,12 +6,15 @@
  * review_step for every spawned worker.
  * @module taskswarm/worker/lane-tools
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'node:fs'
+import { existsSync, mkdirSync, readFileSync, writeFileSync, readdirSync } from 'node:fs'
 import { join } from 'node:path'
+import { homedir } from 'node:os'
+import { execFileSync } from 'node:child_process'
 import { defineTool } from '@deepseek-ai/dsh-tools'
 import {
   parsePrompt, ensureStatusFile, advanceStep, markTaskDone, setTaskStatus,
   appendExecutionLog, appendAmendment, taskStatusFilePath, promptFilePath,
+  parseStatusFile,
 } from '../core/task.ts'
 import { SUPERVISOR_SESSION, sessionInboxDir, writeMailboxMessage } from '../core/mailbox.ts'
 import { checkpointCommit } from '../core/worktree.ts'
@@ -57,6 +60,67 @@ export function buildWorkerMission(taskDir: string, worktree: string, lane: numb
  * Register the four bridge tools on an agent-scoped (or plain) tool context.
  * `ctx` must expose `tools.register` (agent.ctx or a plain plugin context).
  */
+
+/** 当前任务步数进度 `checked/total`（工蜂→蜂王通知附带，让 supervisor 一眼看到跑了多少步）。 */
+function currentStepProgress(taskDir: string): string {
+  try {
+    if (!existsSync(taskStatusFilePath(taskDir))) return ''
+    const info = parseStatusFile(taskDir)
+    return info.total ? `${info.checked}/${info.total}` : ''
+  } catch {
+    return ''
+  }
+}
+
+/**
+ * 当前 worker 累计执行步数（会话事件 `step` 字段最大值）——工蜂→蜂王通知附带。
+ * worker 每执行一个动作（工具调用/回复）step 递增，比 checkbox 步骤细得多。
+ * 读 `~/.dsh/sessions/--<worktree>--/` 下 JSONL(.zstd)，取最大 step；失败返回 ''。
+ */
+function workerStepCount(lane: LaneRuntime): string {
+  const worktree = lane.worktree
+  if (!worktree) return ''
+  try {
+    const dirName = `--${worktree.replace(/^\//, '').replace(/\//g, '-')}--`
+    const dir = join(homedir(), '.dsh', 'sessions', dirName)
+    let sessions: string[] = []
+    try {
+      sessions = readdirSync(dir)
+    } catch {
+      return ''
+    }
+    let maxStep = 0
+    for (const sessionId of sessions) {
+      let files: string[] = []
+      try {
+        files = readdirSync(join(dir, sessionId)).filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.zstd'))
+      } catch {
+        continue
+      }
+      for (const f of files) {
+        const full = join(dir, sessionId, f)
+        let text = ''
+        try {
+          if (f.endsWith('.zstd')) {
+            text = execFileSync('zstd', ['-dc', full], { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', timeout: 5000 })
+          } else {
+            text = readFileSync(full, 'utf8')
+          }
+        } catch {
+          continue
+        }
+        for (const m of text.matchAll(/"step":(\d+)/g)) {
+          const n = Number(m[1])
+          if (Number.isFinite(n) && n > maxStep) maxStep = n
+        }
+      }
+    }
+    return maxStep > 0 ? String(maxStep) : ''
+  } catch {
+    return ''
+  }
+}
+
 export function registerLaneTools(ctx: { tools: { register(def: unknown): unknown } }, lane: LaneRuntime): void {
   const taskId = lane.taskDir.split(/[\\/]/).pop()!.split('-').slice(0, 2).join('-').toUpperCase()
 
@@ -207,8 +271,13 @@ export function registerLaneTools(ctx: { tools: { register(def: unknown): unknow
     },
     async execute(args) {
       const message = args.message as string
-      writeMailboxMessage(sessionInboxDir(lane.stateRoot, lane.batchId, SUPERVISOR_SESSION), `lane-${lane.lane}`, SUPERVISOR_SESSION, 'notify', { taskId, message })
-      return { ok: true, text: `Notified supervisor: ${message}` }
+      // 工蜂→蜂王通知附带步数：STATUS 步数进度 + 会话累计步数，让 supervisor 一眼看到跑了多少步。
+      const progress = currentStepProgress(lane.taskDir)
+      const steps = workerStepCount(lane)
+      const suffix = [progress && `steps ${progress}`, steps && `${steps} steps executed`].filter(Boolean).join(' · ')
+      const body = suffix ? `${message}（${suffix}）` : message
+      writeMailboxMessage(sessionInboxDir(lane.stateRoot, lane.batchId, SUPERVISOR_SESSION), `lane-${lane.lane}`, SUPERVISOR_SESSION, 'notify', { taskId, message: body, steps: steps || undefined, progress: progress || undefined })
+      return { ok: true, text: `Notified supervisor: ${body}` }
     },
   }))
 
@@ -230,8 +299,12 @@ export function registerLaneTools(ctx: { tools: { register(def: unknown): unknow
     async execute(args) {
       const issue = args.issue as string
       const context = (args.context as string | undefined) ?? ''
-      writeMailboxMessage(sessionInboxDir(lane.stateRoot, lane.batchId, SUPERVISOR_SESSION), `lane-${lane.lane}`, SUPERVISOR_SESSION, 'escalate', { taskId, issue, context })
-      return { ok: true, text: `Escalated to supervisor: ${issue}` }
+      const progress = currentStepProgress(lane.taskDir)
+      const steps = workerStepCount(lane)
+      const suffix = [progress && `steps ${progress}`, steps && `${steps} steps executed`].filter(Boolean).join(' · ')
+      const issueBody = suffix ? `${issue}（${suffix}）` : issue
+      writeMailboxMessage(sessionInboxDir(lane.stateRoot, lane.batchId, SUPERVISOR_SESSION), `lane-${lane.lane}`, SUPERVISOR_SESSION, 'escalate', { taskId, issue: issueBody, context, steps: steps || undefined, progress: progress || undefined })
+      return { ok: true, text: `Escalated to supervisor: ${issueBody}` }
     },
   }))
 

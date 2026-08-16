@@ -29,11 +29,12 @@ import type { Context } from '@deepseek-ai/cordis'
 import { homedir } from 'node:os'
 import { join } from 'node:path'
 import { existsSync, readdirSync, statSync, readFileSync, rmSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import type { TaskSwarmEvent, TaskSwarmEngine } from './engine.ts'
 import type { DashboardManager } from './dashboard.ts'
 import { formatBatchStatus, type BatchState, type LaneState } from '../core/status.ts'
 import { formatWavePlan, scanTasks, buildWaves } from '../core/discover.ts'
-import type { TaskPacket } from '../core/task.ts'
+import { parsePrompt, promptFilePath, type TaskPacket } from '../core/task.ts'
 import { messages, detectLocaleFromSession, type Locale, type LocaleState } from './i18n.ts'
 import { writeSetting, removeSetting, repoConfigPath } from './settings.ts'
 
@@ -352,21 +353,38 @@ export function currentWaveIndex(wavePlan: string[][], lanes: LaneState[]): numb
 }
 
 /**
- * 任务步骤进度 `checked/total`：优先读 lane worktree 里的 STATUS.md（worker
- * 实时更新），回退任务包目录。STATUS.md 缺失或无清单项时返回 ''（不展示）。
+ * 任务步骤进度 `checked/total`：已勾选数读 STATUS.md（worker 实时更新），
+ * 总步数优先来自 PROMPT.md（任务包设计时写死，稳定存在），STATUS.md 缺 Step 段
+ * （手工/旧模板）时用 PROMPT 的 checkbox 总数兜底——这样即使第一步还没完成，
+ * 也显示 `0/N`，让用户知道任务一共 N 步。
+ * 两者都拿不到时返回 ''（不展示）。
  */
 export function laneProgress(lane: LaneState, taskFolders: Map<string, string>): string {
-  const dir = lane.worktree && existsSync(join(lane.worktree, 'STATUS.md')) ? lane.worktree : taskFolders.get(lane.taskId)
-  if (!dir) return ''
-  let content: string
-  try {
-    content = readFileSync(join(dir, 'STATUS.md'), 'utf-8')
-  } catch {
-    return ''
+  const statusDir = lane.worktree && existsSync(join(lane.worktree, 'STATUS.md')) ? lane.worktree : taskFolders.get(lane.taskId)
+  let checked = 0
+  let total = 0
+  if (statusDir) {
+    try {
+      const content = readFileSync(join(statusDir, 'STATUS.md'), 'utf-8')
+      checked = (content.match(/- \[x\]/gi) || []).length
+      total = checked + (content.match(/- \[ \]/g) || []).length
+    } catch {
+      // 读不到 STATUS 时走 PROMPT 兜底
+    }
   }
-  const checked = (content.match(/- \[x\]/gi) || []).length
-  const unchecked = (content.match(/- \[ \]/g) || []).length
-  const total = checked + unchecked
+  if (total === 0) {
+    // STATUS.md 无 Step 段（手工/旧模板）：用 PROMPT.md 的 checkbox 总数兜底，
+    // 已勾选视为 0（进度显示"还没动"但知道总步数）。
+    const promptDir = taskFolders.get(lane.taskId)
+    if (promptDir && existsSync(promptFilePath(promptDir))) {
+      try {
+        const packet = parsePrompt(promptFilePath(promptDir), promptDir, '')
+        if (packet) total = packet.steps.reduce((n, s) => n + s.items.length, 0)
+      } catch {
+        // ignore
+      }
+    }
+  }
   return total > 0 ? `${checked}/${total}` : ''
 }
 
@@ -386,9 +404,60 @@ export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'):
   for (const l of state.lanes) {
     if (!current.has(l.taskId)) continue
     const progress = laneProgress(l, taskFolders)
-    lines.push(`  lane ${l.lane} [${l.phase}] ${l.taskId}${progress ? ` ${progress}` : ''}`)
+    const steps = l.worktree ? workerStepCountFromSessions(l.worktree) : 0
+    const bits = [progress && `steps ${progress}`]
+    if (steps > 0) bits.push(`${steps} steps executed`)
+    const tail = bits.filter(Boolean).join(' · ')
+    lines.push(`  lane ${l.lane} [${l.phase}] ${l.taskId}${tail ? ` ${tail}` : ''}`)
   }
   return lines.join('\n')
+}
+
+/**
+ * 读 lane worker 会话日志的最大 `step`（累计执行步数：每次工具调用/回复 +1）。
+ * 会话目录 `~/.dsh/sessions/--<worktree>--/`；JSONL(.zstd) 解压后取最大 step。
+ * 任何失败返回 0，不抛异常。
+ */
+function workerStepCountFromSessions(worktree: string): number {
+  try {
+    const dirName = `--${worktree.replace(/^\//, '').replace(/\//g, '-')}--`
+    const dir = join(homedir(), '.dsh', 'sessions', dirName)
+    let sessions: string[] = []
+    try {
+      sessions = readdirSync(dir)
+    } catch {
+      return 0
+    }
+    let maxStep = 0
+    for (const sessionId of sessions) {
+      let files: string[] = []
+      try {
+        files = readdirSync(join(dir, sessionId)).filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.zstd'))
+      } catch {
+        continue
+      }
+      for (const f of files) {
+        const full = join(dir, sessionId, f)
+        let text = ''
+        try {
+          if (f.endsWith('.zstd')) {
+            text = execFileSync('zstd', ['-dc', full], { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', timeout: 5000 })
+          } else {
+            text = readFileSync(full, 'utf8')
+          }
+        } catch {
+          continue
+        }
+        for (const m of text.matchAll(/"step":(\d+)/g)) {
+          const n = Number(m[1])
+          if (Number.isFinite(n) && n > maxStep) maxStep = n
+        }
+      }
+    }
+    return maxStep
+  } catch {
+    return 0
+  }
 }
 
 /**

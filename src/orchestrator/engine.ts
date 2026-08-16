@@ -17,7 +17,7 @@ import { existsSync, mkdirSync, readdirSync, readFileSync } from 'node:fs'
 import { join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { scanTasks, resolveScope, buildWaves, type WavePlan } from '../core/discover.ts'
-import { ensureStatusFile, setTaskStatus, markTaskRunning, markTaskDone, parseStatusFile, appendExecutionLog, scaffoldTask } from '../core/task.ts'
+import { ensureStatusFile, ensureStatusStructure, setTaskStatus, markTaskRunning, markTaskDone, parseStatusFile, appendExecutionLog, scaffoldTask } from '../core/task.ts'
 import {
   ensureOrchWorktree, createLaneWorktree, checkpointCommit, mergeLane,
   worktreePaths, removeAllLaneWorktrees, type WorktreePaths,
@@ -364,6 +364,9 @@ export class TaskSwarmEngine {
     // single-lane targeted write and race-free.
 
     ensureStatusFile(task)
+    // 2026-08-16：任务包创建方可能只写 Status 头 + Execution Log 而缺 `### Step N:` 段，
+    // 引擎的 advance/进度统计依赖 Step 段——启动 lane 时确保 STATUS.md 与 PROMPT 结构一致。
+    ensureStatusStructure(task)
     // B4 fix：启动 lane 时同步更新 Current Step / Step 1 状态，STATUS.md 自洽
     // （否则 worker 首次 advance 之前 dashboard 一直显示 "Not Started"）。
     setTaskStatus(task.folder, 'running')

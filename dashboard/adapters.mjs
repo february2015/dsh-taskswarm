@@ -51,7 +51,9 @@
  * @module taskswarm/dashboard/adapters
  */
 import { existsSync, readdirSync, readFileSync } from 'node:fs'
+import { execFileSync } from 'node:child_process'
 import { join, basename } from 'node:path'
+import { homedir } from 'node:os'
 import { readBatchState, latestBatch } from '../lib/core/status.js'
 import { scanTasks, buildWaves } from '../lib/core/discover.js'
 import { parseStatusFile } from '../lib/core/task.js'
@@ -135,13 +137,31 @@ export function buildDashboardState(options = {}) {
 
   const mailbox = adaptMailbox(state.stateRoot || stateRoot, state.id)
 
+  // runtimeLaneSnapshots：每 lane 一个快照，带 worker.stepCount（会话日志里最大 step）。
+  // 这是 TaskSwarm 对 TaskPlane Runtime V2 快照契约的最小实现——只填充 dashboard
+  // 需要的 worker.stepCount 字段（⚙ 步数徽章）；其余 V2 字段（tokens/cost 等）无数据源，
+  // 保持 undefined，app.js 已对缺失字段容错。
+  const runtimeLaneSnapshots = {}
+  for (const lane of state.lanes) {
+    if (!lane.worktree) continue
+    const stepCount = readWorkerStepCount(lane.worktree)
+    if (stepCount > 0) {
+      runtimeLaneSnapshots[lane.lane] = {
+        laneNumber: lane.lane,
+        taskId: lane.taskId,
+        batchId: state.id,
+        worker: { status: lane.phase, stepCount },
+      }
+    }
+  }
+
   return {
     laneStates: {},
     telemetry: {},
     batchTotalCost: 0,
     supervisor: null,
     runtimeRegistry: null,
-    runtimeLaneSnapshots: {},
+    runtimeLaneSnapshots,
     runtimeMergeSnapshots: {},
     mailbox,
     batch: {
@@ -164,6 +184,58 @@ export function buildDashboardState(options = {}) {
     tmuxSessions: [],
     timestamp: Date.now(),
   }
+}
+
+/**
+ * 读取 lane worker 会话日志，返回该 worker 从任务开始到现在累计执行的步数。
+ *
+ * "步数"= DSH agent 会话事件里的 `step` 字段：worker 每执行一个动作（工具调用、
+ * 消息回复）step 递增——比 STATUS.md 的 checkbox 步骤细得多，能反映"复杂任务在后台
+ * 跑了很多步"。dashboard 靠它在任务卡上显示 ⚙ 步数，让用户从数字变化看出"还在跑"。
+ *
+ * 会话目录按 worktree 名推导：`~/.dsh/sessions/--<worktree绝对路径去斜杠>--/`。
+ * 事件文件为 session.jsonl(.zstd)，取最大 step。任何一步失败（无会话/不可读/无 step）
+ * 都返回 0，绝不抛异常影响 dashboard。
+ */
+export function readWorkerStepCount(worktree) {
+  if (!worktree) return 0
+  const dirName = `--${worktree.replace(/^\//, '').replace(/\//g, '-')}--`
+  const sessionsRoot = join(homedir(), '.dsh', 'sessions')
+  const dir = join(sessionsRoot, dirName)
+  let sessions = []
+  try {
+    sessions = readdirSync(dir)
+  } catch {
+    return 0
+  }
+  let maxStep = 0
+  for (const sessionId of sessions) {
+    const sessionDir = join(dir, sessionId)
+    let files = []
+    try {
+      files = readdirSync(sessionDir).filter((f) => f.endsWith('.jsonl') || f.endsWith('.jsonl.zstd'))
+    } catch {
+      continue
+    }
+    for (const f of files) {
+      const full = join(sessionDir, f)
+      let text = ''
+      try {
+        if (f.endsWith('.zstd')) {
+          text = execFileSync('zstd', ['-dc', full], { maxBuffer: 64 * 1024 * 1024, encoding: 'utf8', timeout: 5000 })
+        } else {
+          text = readFileSync(full, 'utf8')
+        }
+      } catch {
+        continue
+      }
+      for (const m of text.matchAll(/"step":(\d+)/g)) {
+        const n = Number(m[1])
+        if (Number.isFinite(n) && n > maxStep) maxStep = n
+      }
+    }
+  }
+  return maxStep
 }
 
 /** Map one taskswarm LaneState to the upstream lane record shape. */

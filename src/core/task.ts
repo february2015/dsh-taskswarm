@@ -267,9 +267,67 @@ export function ensureStatusFile(task: TaskPacket): void {
   writeFileSync(path, lines.join('\n') + '\n', 'utf-8')
 }
 
+/**
+ * 确保 STATUS.md 与 PROMPT.md 的 Step 结构一致（2026-08-16 修复）：
+ * 任务包创建方（其它 AI / 手工）可能只写了 `**Status:**` 头 + Execution Log 而缺
+ * `### Step N:` 段——引擎的 advanceStep / 进度统计都依赖 Step 段，缺了会静默失败
+ * （advance 不勾选、进度显示空）。
+ *
+ * 规则：STATUS.md 存在但**没有任何 `### Step` 段**时，从 PROMPT 重建 Step 段
+ * （保留已有的 `**Status:**` 行与 Execution Log），让 STATUS.md 与任务包设计一致。
+ * 已有 Step 段则不动（保留 worker 的勾选进度）。
+ * @returns 是否补建了 Step 段。
+ */
+export function ensureStatusStructure(task: TaskPacket): boolean {
+  const path = taskStatusFilePath(task.folder)
+  if (!existsSync(path)) {
+    ensureStatusFile(task)
+    return true
+  }
+  let content = readFileSync(path, 'utf-8')
+  if (/^### Step \d+: /m.test(content)) return false
+  // 无 Step 段：把 Step 段**注入**到现有内容中（保留 Status 头 / Execution Log 行 /
+  // Blocker 等一切已有内容），插入点为 `## Execution Log` 之前；无该标题则追加到末尾。
+  const stepsBlock = task.steps.map((step) => {
+    const lines = [`### Step ${step.index}: ${step.title}`, `**Status:** ${STEP_STATUS_MARKER.pending}`, '']
+    for (const item of step.items) lines.push(`- [${item.checked ? 'x' : ' '}] ${item.text}`)
+    lines.push('', '---', '')
+    return lines.join('\n')
+  }).join('\n')
+  const logIdx = content.search(/^## Execution Log$/m)
+  if (logIdx >= 0) {
+    content = content.slice(0, logIdx) + stepsBlock + '\n' + content.slice(logIdx)
+  } else {
+    content = content.replace(/\s*$/, '') + '\n\n' + stepsBlock
+  }
+  writeFileSync(path, content, 'utf-8')
+  return true
+}
+
+/**
+ * 任务状态落盘前的结构保证：STATUS.md 存在但缺 `### Step N:` 段时，从 PROMPT.md
+ * 解析任务包并补建 Step 段。所有写 STATUS.md 的入口（setTaskStatus / advanceStep /
+ * markTaskDone / appendExecutionLog / updateStatusField / appendStepStatus …）都应
+ * 先过这一道，确保任务创建/更新/成功/失败/状态变更任何环节都不会落到残缺结构上。
+ * 返回是否补建了 Step 段。
+ */
+export function ensureTaskDirStructure(taskDir: string): boolean {
+  try {
+    const promptPath = promptFilePath(taskDir)
+    if (!existsSync(promptPath)) return false
+    const packet = parsePrompt(promptPath, taskDir, '')
+    if (!packet) return false
+    return ensureStatusStructure(packet)
+  } catch {
+    return false
+  }
+}
+
 function updateStatusField(taskDir: string, field: string, value: string): void {
   const path = taskStatusFilePath(taskDir)
   if (!existsSync(path)) return
+  // 落盘前结构保证：缺 Step 段则从 PROMPT 补建（任务更新/状态变更任何环节都不落残缺结构）。
+  ensureTaskDirStructure(taskDir)
   let content = readFileSync(path, 'utf-8')
   const re = new RegExp(`^\\*\\*${field}:\\*\\*.*$`, 'm')
   content = re.test(content)
@@ -281,6 +339,8 @@ function updateStatusField(taskDir: string, field: string, value: string): void 
 function appendStepStatus(taskDir: string, stepTitle: string, marker: string): void {
   const path = taskStatusFilePath(taskDir)
   if (!existsSync(path)) return
+  // 落盘前结构保证：缺 Step 段则补建，确保能定位到对应 Step 段。
+  ensureTaskDirStructure(taskDir)
   const content = readFileSync(path, 'utf-8')
   const re = new RegExp(`^(### Step \\d+: ${escapeRegExp(stepTitle)}\\n)\\*\\*Status:\\*\\*.*$`, 'm')
   if (re.test(content)) {
@@ -301,7 +361,14 @@ export function advanceStep(task: TaskPacket, stepIndex: number): { step: number
   if (!step) return { step: stepIndex, remaining: 0 }
   // Find the first `- [ ]` line inside this step's section of STATUS.md.
   const re = new RegExp(`^### Step ${step.index}: ${escapeRegExp(step.title)}$`, 'm')
-  const match = content.match(re)
+  let match = content.match(re)
+  // 2026-08-16：STATUS.md 缺 Step 段（任务包创建方只写 Status 头 + Execution Log）时，
+  // 先按 PROMPT 补建结构再勾选——否则 advance 静默失败（不勾选、进度不动）。
+  if (!match && !/^### Step \d+: /m.test(content)) {
+    ensureStatusStructure(task)
+    content = readFileSync(path, 'utf-8')
+    match = content.match(re)
+  }
   if (!match) return { step: stepIndex, remaining: 0 }
   const start = match.index! + match[0].length
   const end = content.slice(start).search(/^### Step \d+:/m)
@@ -358,6 +425,8 @@ export function markTaskRunning(taskDir: string, packet: TaskPacket): string | n
 export function appendExecutionLog(taskDir: string, action: string, outcome: string): void {
   const path = taskStatusFilePath(taskDir)
   if (!existsSync(path)) return
+  // 落盘前结构保证：缺 Step 段则补建（Execution Log 追加到完整结构上）。
+  ensureTaskDirStructure(taskDir)
   appendFileSync(path, `| ${new Date().toISOString()} | ${action} | ${outcome} |\n`, 'utf-8')
 }
 

@@ -5,6 +5,33 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.23] - 2026-08-16
+
+### 新增
+
+- **Web dashboard 每 lane 步数徽章** —— 每个运行中 lane 的任务卡显示 `⚙ N steps`：
+  worker 从任务开始到现在累计执行的步数（会话事件 `step` 字段——每次工具调用/回复 +1），
+  复杂任务在后台跑很多步时，前台靠数字上涨即可感知"还在跑"。数据来自新实现的
+  `runtimeLaneSnapshots`（worker.stepCount），读 worker 会话日志
+  （`~/.dsh/sessions/--<worktree>--/session.jsonl[.zstd]`）。
+- **工蜂→蜂王消息带步数** —— `notify_supervisor` / `escalate_to_supervisor` 现在会在消息里
+  附带 worker 当前的 `steps X/Y`（checkbox 进度）与 `N steps executed`（会话累计步数）；
+  supervisor 定时汇报/状态行的每个 lane 也同时显示两者
+  （如 `lane 1 [running] JM-401 steps 0/11 · 179 steps executed`）。
+
+### 修复
+
+- **总步数回退 PROMPT.md**（`laneProgress`）：STATUS.md 缺 `### Step N:` 段（手工/其它 AI
+  只写 Status 头 + Execution Log）时，总数改用任务包的 checkbox——第一步还没完成也能看到
+  `0/N`，知道任务一共多少步。
+- **所有 STATUS.md 落盘入口先保证 Step 结构** —— 新增 `ensureTaskDirStructure()`，在全部
+  状态持久化写入函数入口调用（`setTaskStatus` / `markTaskDone` / `markTaskRunning` /
+  `advanceStep` / `appendExecutionLog` / `updateStatusField` / `appendStepStatus`）：
+  任务创建 / 更新 / 成功 / 失败 / 状态变更任何环节都不会落到引擎依赖的残缺结构上。
+  `ensureStatusStructure` 改为**注入** Step 段（保留已有 Execution Log 行），而非重写文件。
+- 修复插件测试对新增 `ctx.provide('taskswarm', …)` 服务（b83e4bf）的适配：mock 上下文补了
+  no-op 的 `provide`。
+
 ## [0.2.22] - 2026-08-15
 
 ### 新增
@@ -238,6 +265,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20

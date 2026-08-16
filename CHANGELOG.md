@@ -5,6 +5,37 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.23] - 2026-08-16
+
+### Added
+
+- **Per-lane step counter on the Web dashboard** — each running lane's card now shows a
+  `⚙ N steps` badge: the worker's cumulative executed steps since task start (session event
+  `step` field — every tool call / reply increments it), so a complex task grinding away in the
+  background is visibly "still running" from the rising number. Data comes from the newly
+  implemented `runtimeLaneSnapshots` (worker.stepCount), read from the worker's session log
+  (`~/.dsh/sessions/--<worktree>--/session.jsonl[.zstd]`).
+- **Step counts in worker→supervisor messages** — `notify_supervisor` / `escalate_to_supervisor`
+  now append the worker's current `steps X/Y` (checkboxes) and `N steps executed` (session steps)
+  to the message, and the supervisor's periodic/status reports show both on each lane line
+  (e.g. `lane 1 [running] JM-401 steps 0/11 · 179 steps executed`).
+
+### Fixed
+
+- **Total step count falls back to PROMPT.md** (`laneProgress`): if STATUS.md lacks a
+  `### Step N:` section (created by hand / another AI writing only the Status header +
+  Execution Log), the total now comes from the task packet's checkboxes — so even before the
+  first step completes you see `0/N` and know how many steps the task has.
+- **Every STATUS.md write path now guarantees the Step structure first** — new
+  `ensureTaskDirStructure()` is called at the entry of all persisted-state writers
+  (`setTaskStatus`, `markTaskDone`, `markTaskRunning`, `advanceStep`, `appendExecutionLog`,
+  `updateStatusField`, `appendStepStatus`): task creation / updates / success / failure /
+  status transitions can never land on a STATUS.md that lacks the Step sections the engine
+  relies on. `ensureStatusStructure` now **injects** the Step block (preserving existing
+  Execution Log rows) instead of rewriting the file.
+- Plugin test suite fixed for the new `ctx.provide('taskswarm', …)` service (b83e4bf): the mock
+  context now provides a no-op `provide`.
+
 ## [0.2.22] - 2026-08-15
 
 ### Added
@@ -275,6 +306,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.23]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.22...v0.2.23
 [0.2.22]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.21...v0.2.22
 [0.2.21]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.20...v0.2.21
 [0.2.20]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.19...v0.2.20
