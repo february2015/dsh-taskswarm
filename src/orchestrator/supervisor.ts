@@ -181,7 +181,7 @@ You are the batch supervisor, sharing this session with the operator (activated 
 3. Act per autonomy: ${autonomyRule(autonomy, 'en')}
 4. For routine notices (wave complete / periodic report / stall without anomaly) reply in ≤2 sentences with no extra checks or lists; only expand into verification and handling on failure / REVISE / batch completion / a confirmed stall.
 5. Standard procedures for cleanup / error recovery / work salvage are in the repo's docs/runbook.md — read it before handling.
-6. Notifications arrive as terse English \`[TS ...]\` lines to save tokens — relay them to the operator in the current conversation language (e.g. Chinese if they write Chinese), briefly and clearly.
+6. Notifications are already in complete, human-readable language — do NOT translate or repeat them. Judge only whether there is an anomaly or an action needed: if yes, handle/report it briefly; if no, stay quiet or acknowledge in one short line. Never restate the batch status.
 
 ${ctx}
 
@@ -195,7 +195,7 @@ Normal user conversation is unaffected.`
 3. 按自主度执行：${autonomyRule(autonomy, 'zh-CN')}
 4. 常规提醒（wave 完成 / 定时汇报 / 卡住无异常）回复 ≤2 句，不做额外查证不列表；仅失败 / REVISE / batch 完成 / 确认真卡住才展开查证处理。
 5. 清理残留 / 错误恢复 / 工作抢救的标准步骤见仓库 docs/runbook.zh-CN.md，处理前先读它。
-6. 通知以极简英文 \`[TS ...]\` 到达以节省 token——请用当前会话语言（如用户说中文就用中文）向用户简要清晰地转述进度。
+6. 通知已是完善的、可直接阅读的语言——**不要翻译、不要复述**。只需判断是否有异常或需要动作：有异常就简要处理/汇报；无异常保持安静或一句话确认即可，绝不重述批次状态。
 
 ${ctx}
 
@@ -397,23 +397,29 @@ export function laneProgress(lane: LaneState, taskFolders: Map<string, string>):
  */
 export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'): string {
   const done = state.lanes.filter((l) => l.phase === 'merged' || l.phase === 'failed' || l.phase === 'skipped').length
-  // 短 id：去掉 'b-' 前缀和随机后缀（e2f829），保留 batch 序号部分。
-  const shortId = state.id.replace(/^b-/, '').split('-')[0] ?? state.id
-  const lines = [`b-${shortId} — W?/? · ${done}/${state.lanes.length} done`]
   const wavePlan = recomputeWavePlan(state)
   const waveIdx = currentWaveIndex(wavePlan, state.lanes)
-  lines[0] = lines[0].replace('W?/?', `W${waveIdx + 1}/${wavePlan.length}`)
+  const phaseNames: Record<string, string> = {
+    running: '运行中', review: '评审中', conflict: '冲突待处置', merged: '已合并',
+    failed: '失败', pending: '等待中', skipped: '已跳过',
+  }
+  const lines = [
+    locale === 'zh-CN'
+      ? `批次 ${state.id} — ${state.phase}（已完成 ${done}/${state.lanes.length}）· 波次 ${waveIdx + 1}/${wavePlan.length}`
+      : `Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} done) · Wave ${waveIdx + 1}/${wavePlan.length}`,
+  ]
   const current = new Set(wavePlan[waveIdx] ?? [])
   const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const l of state.lanes) {
     if (!current.has(l.taskId)) continue
     const progress = laneProgress(l, taskFolders)
     const steps = l.worktree ? workerStepCountFromSessions(l.worktree) : 0
-    const bits = [progress && `steps ${progress}`]
-    if (steps > 0) bits.push(String(steps))
-    const tail = bits.filter(Boolean).join(' · ')
-    const phase = l.phase === 'running' ? 'run' : l.phase
-    lines.push(`  L${l.lane} [${phase}] ${l.taskId}${tail ? ` · ${tail}` : ''}`)
+    const bits: string[] = []
+    if (progress) bits.push(locale === 'zh-CN' ? `步骤 ${progress}` : `steps ${progress}`)
+    if (steps > 0) bits.push(locale === 'zh-CN' ? `${steps} 步` : `${steps} steps`)
+    const tail = bits.length > 0 ? ` · ${bits.join('，')}` : ''
+    const phase = phaseNames[l.phase] ?? l.phase
+    lines.push(`  lane ${l.lane} [${phase}] ${l.taskId}${tail}`)
   }
   return lines.join('\n')
 }
@@ -990,7 +996,10 @@ export function startPeriodicSupervision(
       lastReportAt = now
       const mins = Math.round(reportIntervalMs / 60_000)
       const eta = estimateEta(state, refLocale())
-      wake(`[TS report · every ${mins}m]\n${compactBatchStatus(state, refLocale())}${eta && eta !== m.etaLabel ? `\nETA ${eta.replace(/^~/, '').trim()}` : ''}\n💾 ${formatBytes(sessionsBytes(state.lanes))}`)
+      const loc = refLocale()
+      const etaLine = eta && eta !== m.etaLabel ? `${m.etaLabel}${eta}` : ''
+      const usage = m.sessionsUsage(formatBytes(sessionsBytes(state.lanes)))
+      wake([m.periodicReport(mins), compactBatchStatus(state, loc), etaLine, usage].filter(Boolean).join('\n'))
     }
   }
 

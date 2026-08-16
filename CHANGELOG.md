@@ -5,6 +5,21 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.28] - 2026-08-16
+
+### Changed
+
+- **Notifications are now complete, localized messages — and the supervisor never re-translates
+  them** (token-efficiency redesign). Instead of terse English tags that the model must translate
+  and restate (which costs tokens on the model side), every notification is written in full,
+  readable language (Chinese or English per locale) with all the context (batch, wave, per-lane
+  status/steps/executed count, ETA, disk usage). The supervisor system prompt now explicitly says:
+  *notifications are already complete and readable — do NOT translate or repeat them; judge only
+  whether there is an anomaly or an action needed; if none, stay quiet or acknowledge in one short
+  line.* Principle: don't shrink the message, eliminate the re-explanation — the message is
+  written once by the engine, and the model spends no tokens restating it.
+- README: new "Notifications & Token Efficiency" section documenting this design (bilingual).
+
 ## [0.2.27] - 2026-08-16
 
 ### Fixed
@@ -373,6 +388,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25

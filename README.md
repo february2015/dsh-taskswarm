@@ -154,6 +154,31 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 - **Source HMR**: DSH does not enable plugin source HMR on the web profile (`cordis-plugin-hmr` is disabled by default); source changes require `npm run build` followed by a **dsh web restart**.
 - **Batch recovery**: even after a restart, `.taskswarm/` disk state + checkpoints + lane branches persist; check `/orch-status` afterwards and resume/rerun failed lanes through the supervisor without losing completed work.
 
+## Notifications & Token Efficiency
+
+Supervisor notifications are designed to save tokens without losing information:
+
+- **Complete, localized messages** — every notification (periodic report, wave complete, lane
+  failed, stalled, batch complete) is already written in full, human-readable language (Chinese
+  or English per the session locale), e.g.:
+
+  ```
+  [TaskSwarm] ⏱️ 定时汇报（每 5 分钟）：
+  批次 b-msvinu6n — running（已完成 1/4）· 波次 1/2
+    lane 1 [已合并] JM-402 · 步骤 8/8，218 步
+  ```
+
+- **The supervisor agent never re-translates or restates them** — the system prompt explicitly
+  tells it: *notifications are already complete and readable; do NOT translate or repeat them;
+  judge only whether there is an anomaly or an action needed — if yes, handle/report briefly; if
+  no, stay quiet or acknowledge in one short line.* This is what actually saves tokens: the
+  notification itself is written once in the cheapest place (the engine), and the model does not
+  burn tokens re-explaining it back to the user.
+
+- The design principle: **don't shrink the message, eliminate the re-explanation**. A terse
+  message forces the model to translate/expand it (expensive); a complete message lets the user
+  read it directly and lets the model act only on anomalies.
+
 ## Integration with dsh-dingo
 
 TaskSwarm exposes a standard Cordis service for other DSH plugins:

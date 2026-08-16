@@ -81,15 +81,17 @@ test('resolveLocale: 显式 config 优先于检测', () => {
 test('messages: 双语字典关键事件标题', () => {
   const zh = messages('zh-CN')
   const en = messages('en')
-  // 通知消息体统一英文极简（省 token）；supervisor 按会话语言向用户解释。
-  assert.match(zh.batchStarted('b-1', 3), /\[TS started\]/)
-  assert.match(en.batchStarted('b-1', 3), /\[TS started\]/)
-  assert.match(en.batchAborted('b-1'), /\[TS aborted\]/)
-  assert.match(zh.waveComplete(1, 3, 2, 1), /\[TS wave 1\/3 done\]/)
-  assert.match(en.waveComplete(1, 3, 2, 1), /\[TS wave 1\/3 done\] 2 merged · 1 failed/)
-  assert.match(en.laneFailed(2, 'DEMO-006', 'worker exited 1'), /\[TS lane failed\] L2 DEMO-006/)
-  assert.match(en.periodicReport(5), /\[TS report · every 5m\]/)
-  assert.equal(zh.waveComplete(1, 3, 2, 1), en.waveComplete(1, 3, 2, 1), 'zh and en notifications identical (English terse)')
+  // 通知用完善的本地化语言（用户直接可读）；supervisor 提示词指示"不翻译不复述，只判断异常"。
+  assert.match(zh.batchStarted('b-1', 3), /批次已启动/)
+  assert.match(en.batchStarted('b-1', 3), /Batch started/)
+  assert.match(en.batchAborted('b-1'), /Batch aborted/)
+  assert.match(zh.waveComplete(1, 3, 2, 1), /波次 1\/3 完成/)
+  assert.match(en.waveComplete(1, 3, 2, 1), /Wave 1\/3 complete: 2 merged, 1 failed/)
+  assert.match(en.laneFailed(2, 'DEMO-006', 'worker exited 1'), /lane 2 DEMO-006 failed/)
+  assert.match(zh.laneFailed(2, 'DEMO-006'), /失败/)
+  assert.match(en.periodicReport(5), /every 5 minutes/)
+  assert.match(zh.periodicReport(5), /每 5 分钟/)
+  assert.doesNotMatch(zh.waveComplete(1, 3, 2, 1), /\[TS wave/, 'zh uses complete localized language, not terse tags')
 })
 
 test('settings: config.json 合并读写 / locale / reportIntervalMinutes', () => {

@@ -5,6 +5,18 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.28] - 2026-08-16
+
+### 变更
+
+- **通知改为完善的本地化消息，supervisor 不再翻译/复述**（省 token 设计重构）。此前是极简英文
+  标签、由模型翻译并重述（模型侧反而更费 token）；现在每条通知都用完整可读的语言（随 locale
+  中/英）写出，含全部上下文（批次 / 波次 / 每 lane 状态与步数 / ETA / 磁盘占用）。supervisor
+  系统提示词明确：*通知已是完整可读文本——不要翻译、不要复述；只判断是否有异常或需要动作，
+  没有就保持安静或一句话确认。* 原则：不是把消息压短，而是消除复述——消息由引擎写一次，
+  模型不再花 token 重述。
+- README：新增「通知与 Token 效率」小节说明该设计（双语）。
+
 ## [0.2.27] - 2026-08-16
 
 ### 修复
@@ -327,6 +339,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27
 [0.2.26]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.25...v0.2.26
 [0.2.25]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.24...v0.2.25

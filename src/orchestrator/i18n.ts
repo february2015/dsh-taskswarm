@@ -60,70 +60,75 @@ export interface SupervisorMessages {
 }
 
 const zhCN: SupervisorMessages = {
-  // 通知消息体统一英文极简（省 token）；supervisor 会按当前会话语言向用户解释。
-  batchStarted: (id, total) => `[TS started] ${id} · ${total} tasks`,
-  laneFailed: (lane, taskId, error) => `[TS lane failed] L${lane} ${taskId}${error ? ` · ${error.slice(0, 80)}` : ''}`,
-  laneRevise: (lane, taskId) => `[TS revise] L${lane} ${taskId} (reviewer REVISE)`,
-  waveComplete: (wave, total, merged, failed) => `[TS wave ${wave}/${total} done] ${merged} merged · ${failed} failed`,
-  batchComplete: (id, merged, total, failed) => `[TS batch complete] ${merged}/${total} merged · ${failed} failed`,
-  batchAborted: (id) => `[TS aborted] ${id}`,
-  etaLabel: 'ETA ',
-  noBatchState: '(no batch state)',
+  // 通知用完善的本地化语言（用户直接可读，supervisor 无需翻译/复述——提示词已明确）。
+  batchStarted: (id, total) => `[TaskSwarm] 批次已启动：${id}，共 ${total} 个任务`,
+  laneFailed: (lane, taskId, error) => `[TaskSwarm] ⚠️ lane ${lane} ${taskId} 失败${error ? `：${error.slice(0, 100)}` : ''}`,
+  laneRevise: (lane, taskId) => `[TaskSwarm] 🟡 lane ${lane} ${taskId} 待修订（reviewer REVISE）`,
+  waveComplete: (wave, total, merged, failed) => `[TaskSwarm] 🌊 波次 ${wave}/${total} 完成：${merged} 个成功合并，${failed} 个失败`,
+  batchComplete: (id, merged, total, failed) => `[TaskSwarm] ✅ 批次完成：${merged}/${total} 成功合并，${failed} 个失败`,
+  batchAborted: (id) => `[TaskSwarm] ⛔ 批次已中止：${id}`,
+  etaLabel: '预计剩余：',
+  noBatchState: '(无批次)',
   stalled: (id, minutes) =>
-    `[TS stalled] ${id} no lane changes ~${minutes}m and session logs stale. Inspect with tswarm_supervisor_status, then wait / pause / abort.`,
+    `[TaskSwarm] ⏱️ 疑似卡住：${id} 已约 ${minutes} 分钟无变化且 worker 会话日志超时。` +
+    '用 tswarm_supervisor_status 查证，决定继续等待 / 暂停 / 中止。',
   progressStalled: (lane, taskId, minutes) =>
-    `[TS 🐢 progress] L${lane} ${taskId} active but no advance ~${minutes}m — worker may be batching; remind it to \`advance\` after each checkbox.`,
-  periodicReport: (minutes) => `[TS report · every ${minutes}m]`,
-  reportIntervalOn: (minutes) => `Periodic reports on: every ${minutes} min.`,
-  reportIntervalOff: 'Periodic reports off.',
-  invalidInterval: (minutes) => `Invalid interval: ${minutes} min (integer ≥ 0; 0 = off)`,
-  waveHeader: (current, total) => `W${current}/${total}`,
-  etaDone: 'done',
-  etaEstimating: 'estimating',
-  etaBaseOne: (seconds) => `1 lane ${seconds}s`,
-  etaBaseMany: (count, seconds) => `${count} lanes avg ${seconds}s`,
-  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes}m (${base} × ${remaining} lanes ÷ ${parallel})`,
+    `[TaskSwarm] 🐢 进度停滞：lane ${lane} ${taskId} 会话活跃但约 ${minutes} 分钟未 advance——` +
+    'worker 可能在攒批，提醒它每完成一步就 advance（进度显示与崩溃恢复依赖增量检查点）。',
+  periodicReport: (minutes) => `[TaskSwarm] ⏱️ 定时汇报（每 ${minutes} 分钟）：`,
+  reportIntervalOn: (minutes) => `定时汇报已开启：每 ${minutes} 分钟一次。`,
+  reportIntervalOff: '定时汇报已关闭。',
+  invalidInterval: (minutes) => `无效间隔：${minutes} 分钟（需要 ≥0 的整数，0=关闭）`,
+  waveHeader: (current, total) => `当前波次：${current}/${total}`,
+  etaDone: '已完成',
+  etaEstimating: '估算中（尚无已完成 lane）',
+  etaBaseOne: (seconds) => `1 个 lane 用时 ${seconds}s`,
+  etaBaseMany: (count, seconds) => `${count} 个 lane 平均 ${seconds}s`,
+  etaFmt: (minutes, base, _seconds, remaining, parallel) => `约 ${minutes} 分钟（${base} × ${remaining} 个剩余 lane ÷ 并行 ${parallel}）`,
   localeCurrent: (locale) =>
     `当前 supervisor 语言：${locale === 'en' ? '英文 (en)' : '中文 (zh-CN)'}（说"用英文"/"用中文"可切换；"自动"恢复按会话语言检测）`,
   localeSwitchedTo: (locale, configPath) =>
     `已切换为${locale === 'en' ? '英文' : '中文'}，通知与 supervisor 提示词即时生效，并已写入 ${configPath}。`,
-  dashboardUrl: (url) => `📊 Dashboard: ${url}`,
-  sessionsUsage: (bytes) => `💾 ${bytes}`,
+  dashboardUrl: (url) => `📊 Dashboard 已启动：${url}`,
+  sessionsUsage: (bytes) => `💾 本批次 worker 会话磁盘占用：${bytes}`,
   cleanupOffer: (bytes) =>
-    `✅ All merged. Delete this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
+    `✅ 全部任务已成功合并。要清理本批次 worker 的会话历史（${bytes}）吗？回复「保留」或「删除」。`,
 }
 
 const en: SupervisorMessages = {
-  batchStarted: (id, total) => `[TS started] ${id} · ${total} tasks`,
-  laneFailed: (lane, taskId, error) => `[TS lane failed] L${lane} ${taskId}${error ? ` · ${error.slice(0, 80)}` : ''}`,
-  laneRevise: (lane, taskId) => `[TS revise] L${lane} ${taskId} (reviewer REVISE)`,
-  waveComplete: (wave, total, merged, failed) => `[TS wave ${wave}/${total} done] ${merged} merged · ${failed} failed`,
-  batchComplete: (id, merged, total, failed) => `[TS batch complete] ${merged}/${total} merged · ${failed} failed`,
-  batchAborted: (id) => `[TS aborted] ${id}`,
-  etaLabel: 'ETA ',
-  noBatchState: '(no batch state)',
+  // Complete, human-readable notifications (no translation/restating needed — prompt says so).
+  batchStarted: (id, total) => `[TaskSwarm] Batch started: ${id}, ${total} tasks`,
+  laneFailed: (lane, taskId, error) => `[TaskSwarm] ⚠️ lane ${lane} ${taskId} failed${error ? `: ${error.slice(0, 100)}` : ''}`,
+  laneRevise: (lane, taskId) => `[TaskSwarm] 🟡 lane ${lane} ${taskId} awaiting revision (reviewer REVISE)`,
+  waveComplete: (wave, total, merged, failed) => `[TaskSwarm] 🌊 Wave ${wave}/${total} complete: ${merged} merged, ${failed} failed`,
+  batchComplete: (id, merged, total, failed) => `[TaskSwarm] ✅ Batch complete: ${merged}/${total} merged, ${failed} failed`,
+  batchAborted: (id) => `[TaskSwarm] ⛔ Batch aborted: ${id}`,
+  etaLabel: 'ETA: ',
+  noBatchState: '(no batch)',
   stalled: (id, minutes) =>
-    `[TS stalled] ${id} no lane changes ~${minutes}m and session logs stale. Inspect with tswarm_supervisor_status, then wait / pause / abort.`,
+    `[TaskSwarm] ⏱️ Possibly stalled: ${id} has seen no lane changes for ~${minutes} minutes and worker session logs are stale. ` +
+    'Check with tswarm_supervisor_status, then decide: keep waiting / pause / abort.',
   progressStalled: (lane, taskId, minutes) =>
-    `[TS 🐢 progress] L${lane} ${taskId} active but no advance ~${minutes}m — worker may be batching; remind it to \`advance\` after each checkbox.`,
-  periodicReport: (minutes) => `[TS report · every ${minutes}m]`,
-  reportIntervalOn: (minutes) => `Periodic reports on: every ${minutes} min.`,
-  reportIntervalOff: 'Periodic reports off.',
-  invalidInterval: (minutes) => `Invalid interval: ${minutes} min (integer ≥ 0; 0 = off)`,
-  waveHeader: (current, total) => `W${current}/${total}`,
-  etaDone: 'done',
-  etaEstimating: 'estimating',
-  etaBaseOne: (seconds) => `1 lane ${seconds}s`,
-  etaBaseMany: (count, seconds) => `${count} lanes avg ${seconds}s`,
-  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes}m (${base} × ${remaining} lanes ÷ ${parallel})`,
+    `[TaskSwarm] 🐢 Progress stalled: lane ${lane} ${taskId} is active but has not advanced for ~${minutes} minutes — ` +
+    'the worker may be batching; remind it to `advance` after each checkbox (progress display and crash recovery depend on incremental checkpoints).',
+  periodicReport: (minutes) => `[TaskSwarm] ⏱️ Periodic report (every ${minutes} minutes):`,
+  reportIntervalOn: (minutes) => `Periodic reports enabled: every ${minutes} minutes.`,
+  reportIntervalOff: 'Periodic reports disabled.',
+  invalidInterval: (minutes) => `Invalid interval: ${minutes} minutes (must be an integer ≥ 0; 0 = off)`,
+  waveHeader: (current, total) => `Current wave: ${current}/${total}`,
+  etaDone: 'Complete',
+  etaEstimating: 'Estimating (no completed lanes yet)',
+  etaBaseOne: (seconds) => `1 lane in ${seconds}s`,
+  etaBaseMany: (count, seconds) => `${count} lanes, avg ${seconds}s`,
+  etaFmt: (minutes, base, _seconds, remaining, parallel) => `~${minutes} min (${base} × ${remaining} lanes ÷ parallel ${parallel})`,
   localeCurrent: (locale) =>
     `Current supervisor language: ${locale === 'en' ? 'English (en)' : 'Chinese (zh-CN)'} (say "use English"/"use Chinese" to switch; "auto" re-detects from your session)`,
   localeSwitchedTo: (locale, configPath) =>
     `Switched to ${locale === 'en' ? 'English' : 'Chinese'} — notifications and the supervisor prompt take effect immediately, and the choice is saved to ${configPath}.`,
-  dashboardUrl: (url) => `📊 Dashboard: ${url}`,
-  sessionsUsage: (bytes) => `💾 ${bytes}`,
+  dashboardUrl: (url) => `📊 Dashboard started: ${url}`,
+  sessionsUsage: (bytes) => `💾 Worker session disk usage (this batch): ${bytes}`,
   cleanupOffer: (bytes) =>
-    `✅ All merged. Delete this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
+    `✅ All tasks merged successfully. Delete this batch's worker session history (${bytes})? Reply "keep" or "delete".`,
 }
 
 const dictionaries: Record<Locale, SupervisorMessages> = { 'zh-CN': zhCN, en }
