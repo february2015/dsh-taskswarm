@@ -153,6 +153,19 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 - **Source HMR**: DSH does not enable plugin source HMR on the web profile (`cordis-plugin-hmr` is disabled by default); source changes require `npm run build` followed by a **dsh web restart**.
 - **Batch recovery**: even after a restart, `.taskswarm/` disk state + checkpoints + lane branches persist; check `/orch-status` afterwards and resume/rerun failed lanes through the supervisor without losing completed work.
 
+## Integration with dsh-dingo
+
+TaskSwarm exposes a standard Cordis service for other DSH plugins:
+
+```ts
+const taskswarm = ctx.get('taskswarm')
+const { batches } = taskswarm.getSnapshot()
+```
+
+Each batch includes `ownerSessionId`, so plugins like [dsh-dingo](https://github.com/february2015/dsh-dingo) can show a **“waiting for swarm”** state on the main session card while the batch is still running.
+
+This makes it possible to see “main conversation finished, but the swarm is still working” directly in the dsh-dingo card panel.
+
 ## Docs
 
 - **[Runbook (ops)](docs/runbook.md)** — standard operating procedures for cleanup, error recovery, and work salvage (required reading for supervisors / AI agents)

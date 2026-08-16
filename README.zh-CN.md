@@ -145,6 +145,21 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 - **源码热更**：DSH 官方在 web profile 上未启用插件源码 HMR（`cordis-plugin-hmr` 默认禁用）；修改 TaskSwarm 源码需 `npm run build` 后**重启 dsh web** 生效。
 - **批次可恢复**：即使重启，`.taskswarm/` 磁盘状态 + 检查点 + lane 分支都会保留；重启后可用 `/orch-status` 查看，并通过 supervisor 恢复或重跑失败 lane，不丢已完成工作。
 
+## 与 dsh-dingo 配合
+
+TaskSwarm 向其它 DSH 插件暴露标准 Cordis 服务：
+
+```ts
+const taskswarm = ctx.get('taskswarm')
+const { batches } = taskswarm.getSnapshot()
+```
+
+每个 batch 都带有 `ownerSessionId`，所以像 [dsh-dingo](https://github.com/february2015/dsh-dingo) 这样的插件可以在主对话卡片上显示“等待蜂群”状态，只要批次还在跑。
+
+这样你就能在 dsh-dingo 的卡片面板里直接看到：
+
+> 主对话已经完成，但蜂群还在跑，还没有真正交付。
+
 ## 文档
 
 - **[运维手册（Runbook）](docs/runbook.zh-CN.md)** —— 清理残留 / 错误恢复 / 工作抢救的标准作业程序（supervisor / AI 代理必读）
