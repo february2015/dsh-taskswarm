@@ -5,6 +5,16 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.30] - 2026-08-16
+
+### 变更
+
+- **所有 TaskSwarm agent 会话的 meta 增加 `taskswarmWorker: true` 显式标记** —— worker
+  （in-process + headless）、reviewer、merger 会话都带上该标记。这让 dsh-dingo 等插件能精确
+  识别 TaskSwarm 内部 agent（它此前靠 `origin === 'subagent'` 和 `.taskswarm/worktrees/` 路径
+  过滤；显式标记让过滤更稳，即使这些信号变化也不受影响）。TaskSwarm 自身行为不变。
+- 回归防护：spawner 审计测试新增要求——四个 agent 创建文件都必须含 `taskswarmWorker: true`。
+
 ## [0.2.29] - 2026-08-16
 
 ### 新增
@@ -354,6 +364,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27

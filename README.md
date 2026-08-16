@@ -193,6 +193,10 @@ Each batch includes `ownerSessionId`, so plugins like [dsh-dingo](https://github
 
 This makes it possible to see “main conversation finished, but the swarm is still working” directly in the dsh-dingo card panel.
 
+**Clean card list** — TaskSwarm's internal worker/reviewer/merger sessions never appear as user
+cards in dsh-dingo: no purple draft counts, no stray cards, no reminders from sub-agents. Only the
+main session that started the batch shows as a user card (with the "waiting for swarm" state).
+
 ## Docs
 
 - **[Runbook (ops)](docs/runbook.md)** — standard operating procedures for cleanup, error recovery, and work salvage (required reading for supervisors / AI agents)

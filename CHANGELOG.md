@@ -5,6 +5,18 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.30] - 2026-08-16
+
+### Changed
+
+- **All TaskSwarm agent sessions are now tagged `taskswarmWorker: true` in their session meta** —
+  worker (in-process + headless), reviewer, and merger sessions all carry the explicit marker.
+  This lets plugins like dsh-dingo identify TaskSwarm-internal agents precisely (it already
+  filtered on `origin === 'subagent'` and the `.taskswarm/worktrees/` cwd; the explicit flag makes
+  the filter robust even if those signals change). No behavior change for TaskSwarm itself.
+- Regression guard: the spawner audit test now also requires `taskswarmWorker: true` in all four
+  agent-creation files.
+
 ## [0.2.29] - 2026-08-16
 
 ### Added
@@ -403,6 +415,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28
 [0.2.27]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.26...v0.2.27

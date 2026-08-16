@@ -181,6 +181,10 @@ const { batches } = taskswarm.getSnapshot()
 
 这样你就能在 dsh-dingo 的卡片面板里直接看到：
 
+**卡片清单干净** —— TaskSwarm 内部的 worker / reviewer / merger 会话不会作为用户卡片出现在
+dsh-dingo 里：没有多余的紫色草稿计数、没有游离卡片、不会收到子 agent 的提醒。只有发起批次的
+主会话以用户卡片形式出现（带"等待蜂群"状态）。
+
 > 主对话已经完成，但蜂群还在跑，还没有真正交付。
 
 ## 文档

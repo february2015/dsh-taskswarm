@@ -59,7 +59,7 @@ async function run(ctx: Context, startup: TaskSwarmWorkerStartupValues, io: Work
 
   const { agent } = await agents.create({
     sessionId: SessionId(`session-${randomUUID()}`),
-    meta: { cwd: startup.worktree, origin: 'subagent' },
+    meta: { cwd: startup.worktree, origin: 'subagent', taskswarmWorker: true },
     agentOptions: {
       provider: selection.provider,
       model: startup.model ?? selection.model,

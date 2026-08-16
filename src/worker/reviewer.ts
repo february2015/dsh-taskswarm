@@ -16,7 +16,9 @@ export interface ReviewerDeps {
   agents: {
     create(options: {
       sessionId: unknown
-      meta: { cwd: string; origin?: 'subagent' }
+      /** cwd = lane worktree; origin='subagent' 标记内部会话；taskswarmWorker 供
+       *  dsh-dingo 等插件显式识别 TaskSwarm 内部 worker/reviewer/merger。 */
+      meta: { cwd: string; origin?: 'subagent'; taskswarmWorker?: boolean }
       agentOptions: { provider: string; model: string }
       setup?: (agentCtx: unknown) => void
     }): Promise<{ agent: ReviewerAgent; dispose?(): Promise<void> | void }>
@@ -77,7 +79,7 @@ export function createReviewerSpawner(
     const model = reviewerModel ?? selection.model
     const { agent, dispose } = await deps.agents.create({
       sessionId: SessionId(`session-${randomUUID()}`),
-      meta: { cwd: request.worktree, origin: 'subagent' },
+      meta: { cwd: request.worktree, origin: 'subagent', taskswarmWorker: true },
       agentOptions: { provider: selection.provider, model },
       setup: (agentCtx) => {
         // Reviewer 也是内部 agent：必须 full access + approvals off（2026-08-16 修复——

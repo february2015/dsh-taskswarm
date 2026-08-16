@@ -64,5 +64,6 @@ test('every agent spawner (worker/reviewer/merger/runner) grants full access in 
   for (const rel of files) {
     const src = readFileSync(join(srcRoot, rel), 'utf-8')
     assert.match(src, /grantWorkerFullAccess/, `${rel} must grant full access in setup`)
+    assert.match(src, /taskswarmWorker: true/, `${rel} must tag sessions taskswarmWorker for dingo`)
   }
 })

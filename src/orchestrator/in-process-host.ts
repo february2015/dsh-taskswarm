@@ -49,7 +49,9 @@ export class InProcessWorkerHost implements WorkerHost {
         // origin 'subagent' keeps worker sessions out of the sidebar's workspace
         // groups (they are internal agents, not user conversations); dispose()
         // tears the session down once the lane turn finishes.
-        meta: { cwd: spec.worktree, origin: 'subagent' },
+        // taskswarmWorker: 显式标记，供 dsh-dingo 等插件精确识别 TaskSwarm 内部 worker
+        // （9fd2634：dingo 用该字段排除内部会话，避免出现在用户卡片清单/统计）。
+        meta: { cwd: spec.worktree, origin: 'subagent', taskswarmWorker: true },
         agentOptions: { provider: selection.provider, model: spec.model ?? selection.model },
         setup: (agentCtx) => {
           // Workers are internal agents: grant them full sandbox access with

@@ -48,7 +48,7 @@ export function createMergerSpawner(
     const { agent, dispose } = await deps.agents.create({
       sessionId: SessionId(`session-${randomUUID()}`),
       // cwd = orch worktree so the agent lands inside the in-progress merge.
-      meta: { cwd: request.orchWorktree, origin: 'subagent' },
+      meta: { cwd: request.orchWorktree, origin: 'subagent', taskswarmWorker: true },
       agentOptions: { provider: selection.provider, model },
       setup: (agentCtx) => {
         // The merger edits files and runs git: grant full access like workers.
