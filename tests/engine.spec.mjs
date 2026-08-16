@@ -5,6 +5,7 @@ import { join } from 'node:path'
 import { tmpdir } from 'node:os'
 import { TaskSwarmEngine } from '../lib/orchestrator/engine.js'
 import { runGit } from '../lib/core/git.js'
+import { readBatchState, writeBatchState } from '../lib/core/status.js'
 import { checkpointCommit, worktreePaths, listLaneWorktrees } from '../lib/core/worktree.js'
 import { markTaskDone, parseStatusFile } from '../lib/core/task.js'
 
@@ -549,5 +550,133 @@ test('switchLaneModel reruns a running lane with the new model from the next ste
   assert.ok(sSpawns.length >= 2, `S-002 spawned at least twice (initial + rerun), got ${sSpawns.length}`)
   assert.ok(sSpawns.some((s) => s.model === 'deepseek-r1'), 'rerun used the new model')
 
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('pause then resume keeps the original wave count (wavePlan persisted, never recomputed)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  // 依赖链：A → B → C 组成 3 个 wave。
+  writeTask(join(tasksRoot, 'W-001-alpha'), 'W-001', 'Alpha', [])
+  writeTask(join(tasksRoot, 'W-002-bravo'), 'W-002', 'Bravo', ['W-001'])
+  writeTask(join(tasksRoot, 'W-003-charlie'), 'W-003', 'Charlie', ['W-002'])
+  const stateRoot = join(repo, '.taskswarm')
+  const host = new SlowWorkerHost() // 800ms/lane
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host })
+
+  engine.run('all')
+  // 等 Wave 1（W-001）完成（800ms），此时 W-002/W-003 未开始。
+  await sleep(1100)
+
+  // 暂停（等当前 wave 跑完 = Wave 1 已完成，Wave 2 未开始）。
+  assert.equal(engine.pause(), true, 'pause succeeds')
+  let state = engine.status()
+  const deadline = Date.now() + 10_000
+  while (state && state.phase === 'running' && Date.now() < deadline) {
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.equal(state.phase, 'paused', `batch paused, got ${state.phase}`)
+
+  // 关键断言：暂停时 wavePlan 仍是 3 个 wave（不是只剩 2 个）。
+  const pausedPlan = readBatchState(stateRoot, state.id)
+  assert.equal(pausedPlan.waves, 3, `original wave count persisted, got ${pausedPlan.waves}`)
+  assert.equal(pausedPlan.wavePlan.length, 3, `wavePlan array has 3 waves, got ${pausedPlan.wavePlan.length}`)
+
+  // 恢复 → 应继续从 Wave 2 跑，wave 结构不变。
+  assert.equal(engine.resume(), true, 'resume succeeds')
+  const deadline2 = Date.now() + 30_000
+  let state2 = engine.status()
+  while (state2 && (state2.phase === 'running' || state2.phase === 'planning') && Date.now() < deadline2) {
+    await sleep(100)
+    state2 = engine.status()
+  }
+  assert.equal(state2.phase, 'complete', `batch completes after resume, got ${state2.phase}`)
+
+  // 恢复后的 wavePlan 仍为 3（绝不能因恢复而重算成 2）。
+  const afterPlan = readBatchState(stateRoot, state2.id)
+  assert.equal(afterPlan.wavePlan.length, 3, `wavePlan stays 3 after resume, got ${afterPlan.wavePlan.length}`)
+  // 所有 lane 的 wave 号与原始规划一致（W-001=1, W-002=2, W-003=3）。
+  const waveById = new Map(afterPlan.lanes.map((l) => [l.taskId, l.wave]))
+  assert.equal(waveById.get('W-001'), 1)
+  assert.equal(waveById.get('W-002'), 2)
+  assert.equal(waveById.get('W-003'), 3)
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('abort then immediate start: new batch runs cleanly (no cross-batch interference)', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'X-001-xray'), 'X-001', 'Xray', [])
+  writeTask(join(tasksRoot, 'Y-002-yankee'), 'Y-002', 'Yankee', [])
+  const stateRoot = join(repo, '.taskswarm')
+  const engine = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host: new SlowWorkerHost() })
+
+  const h1 = engine.run('all')
+  await sleep(200)
+  assert.equal(engine.abort(), true, 'abort succeeds')
+  await sleep(500) // let the abort settle
+
+  // abort 后立刻 start 新批次：必须成功（不是"no running batch"错）。
+  const h2 = engine.run('all')
+  assert.ok(h2.batchId.startsWith('b-'), 'new batch starts after abort')
+  assert.notEqual(h2.batchId, h1.batchId, 'new batch id differs')
+
+  const deadline = Date.now() + 20_000
+  let state = engine.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine.status()
+  }
+  assert.equal(state.phase, 'complete', `new batch completes after abort+start, got ${state.phase}`)
+  assert.equal(state.id, h2.batchId, 'status reflects the new batch')
+
+  rmSync(repo, { recursive: true, force: true })
+})
+
+test('crash recovery: a fresh engine instance resumes the batch and keeps the wave plan', async () => {
+  const repo = await makeRepo()
+  const tasksRoot = join(repo, 'tasks')
+  writeTask(join(tasksRoot, 'Z-001-zulu'), 'Z-001', 'Zulu', [])
+  writeTask(join(tasksRoot, 'AA-002-alfa'), 'AA-002', 'Alfa', ['Z-001'])
+  const stateRoot = join(repo, '.taskswarm')
+
+  // 构造崩溃现场（等价于进程死在 Wave 1 完成后）：磁盘 phase=running、
+  // Wave 1 (Z-001) merged、Wave 2 (AA-002) pending、wavePlan 持久化。
+  writeBatchState({
+    id: 'b-crash', repoRoot: repo, tasksRoot, stateRoot, phase: 'running',
+    scope: 'all', startedAt: new Date().toISOString(), waves: 2,
+    wavePlan: [['Z-001'], ['AA-002']],
+    lanes: [
+      { lane: 1, taskId: 'Z-001', phase: 'merged', wave: 1, log: ['merged'] },
+      { lane: 2, taskId: 'AA-002', phase: 'pending', wave: 2, log: [] },
+    ],
+  })
+
+  // 新实例（模拟重启）resume：应从磁盘恢复，wave 结构不变。
+  const engine2 = new TaskSwarmEngine({ repoRoot: repo, tasksRoot, stateRoot, host: new SlowWorkerHost() })
+  assert.equal(engine2.resume(), true, 'fresh engine resumes the pending batch')
+
+  const deadline = Date.now() + 25_000
+  let state = engine2.status()
+  while (state && (state.phase === 'running' || state.phase === 'planning')) {
+    if (Date.now() > deadline) break
+    await sleep(100)
+    state = engine2.status()
+  }
+  assert.equal(state.phase, 'complete', `recovered batch completes, got ${state.phase}`)
+  // wavePlan 原样保持 2 个 wave（Z-001 已完成 + AA-002 待跑）。
+  assert.equal(state.wavePlan.length, 2, `wavePlan keeps 2 waves after crash recovery, got ${state.wavePlan.length}`)
+  const z = state.lanes.find((l) => l.taskId === 'Z-001')
+  const aa = state.lanes.find((l) => l.taskId === 'AA-002')
+  assert.equal(z.phase, 'merged', 'completed wave-1 lane merged')
+  assert.equal(aa.phase, 'merged', 'wave-2 lane merged after recovery')
+  assert.equal(z.wave, 1, 'lane Z-001 wave=1 preserved')
+  assert.equal(aa.wave, 2, 'lane AA-002 wave=2 preserved')
+
+  // 让后台异步尾巴 settle 后再清理。
+  await sleep(1200)
   rmSync(repo, { recursive: true, force: true })
 })

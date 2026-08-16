@@ -5,6 +5,34 @@ All notable changes to **dsh-taskswarm** (TaskSwarm 蜂群) are documented here.
 The format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/); this project uses
 [Semantic Versioning](https://semver.org/). 中文版见 [CHANGELOG.zh-CN.md](CHANGELOG.zh-CN.md).
 
+## [0.2.31] - 2026-08-16
+
+### Fixed
+
+- **Wave plan is now fixed at batch start and never recomputed mid-flight** — previously,
+  pause/resume and crash recovery re-ran `buildWaves` on the remaining (not-yet-done) tasks, so a
+  batch originally planned as 3 waves could silently shrink to 2 after a pause (completed wave's
+  tasks dropped out of the recompute). The wave structure is now persisted in
+  `BatchState.wavePlan` at start and reused verbatim on resume/recovery; completed lanes are
+  skipped by the existing "merged" logic, remaining tasks keep their original wave numbers.
+  Effects:
+  - pause → resume keeps the original wave count and per-lane wave numbers;
+  - crash recovery (fresh engine) resumes within the original wave layout;
+  - `lane.wave` stays consistent, so dsh-dingo's wave-segmented background counts stay correct.
+- `runLane` now carries the original `wave` number onto resumed lanes (it was dropped when the
+  lane object was rebuilt).
+- Dashboard adapter prefers the persisted `state.wavePlan` (falls back to recompute for old batch
+  files).
+
+### Changed
+
+- README: documented the fixed-wave-plan behavior (bilingual).
+
+### Tests
+
+- New regression tests: pause→resume keeps 3 waves; abort→immediate-start runs cleanly; crash
+  recovery from a disk state resumes with the original wave plan. Full suite: 47/47.
+
 ## [0.2.30] - 2026-08-16
 
 ### Changed
@@ -415,6 +443,7 @@ Initial port of [TaskPlane](https://github.com/HenryLach/taskplane) to DeepSeek 
 - Verified inside a real DSH process: real LLM workers in parallel (deepseek-v4-flash), checkpoint
   commits, merge into `taskswarm/orch`.
 
+[0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28

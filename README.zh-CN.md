@@ -146,6 +146,7 @@ taskswarm/<taskId>        ← 每个 lane 的工作分支（含步骤检查点 c
 - **配置热更**：TaskSwarm 是标准 DSH bundle，配置在 profile 的 `cordis.patch.yml` 中覆盖后由 DSH 热重载、无需重启。**但注意**：orchestrator 插件被重载时（例如修改它的配置行），卸载清理会 **abort 当前运行中的所有批次**——批次运行期间请勿修改 orchestrator 配置。
 - **源码热更**：DSH 官方在 web profile 上未启用插件源码 HMR（`cordis-plugin-hmr` 默认禁用）；修改 TaskSwarm 源码需 `npm run build` 后**重启 dsh web** 生效。
 - **批次可恢复**：即使重启，`.taskswarm/` 磁盘状态 + 检查点 + lane 分支都会保留；重启后可用 `/orch-status` 查看，并通过 supervisor 恢复或重跑失败 lane，不丢已完成工作。
+- **波次计划在批次启动时固定**：wave 结构（几个波、每波哪些任务）持久化且绝不在执行中重算——暂停/恢复、崩溃恢复、单个 lane 重跑都在原始 wave 布局内继续。已完成的波保持完成，剩余任务保留原始波次号，dashboard 与 dingo 的 Wave 分段保持一致。
 
 ## 通知与 Token 效率
 

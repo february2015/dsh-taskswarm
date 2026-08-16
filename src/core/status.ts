@@ -37,6 +37,13 @@ export interface BatchState {
   startedAt: string
   endedAt?: string
   waves: number
+  /**
+   * 批次启动时确定的 wave plan（每 wave 一个 taskId 数组），持久化——
+   * 暂停/恢复/崩溃恢复时**原样复用**，绝不在中途重算（2026-08-16 修复：
+   * 恢复时重新 buildWaves 会把已完成 wave 的任务排除，wave 数变化、
+   * lane.wave 错位，dingo 的 Wave 分段数据也随之错乱）。
+   */
+  wavePlan: string[][]
   lanes: LaneState[]
 }
 

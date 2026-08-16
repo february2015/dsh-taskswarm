@@ -154,6 +154,7 @@ taskswarm/<taskId>        ← per-lane working branch (holds step checkpoints; r
 - **Config hot-reload**: TaskSwarm is a standard DSH bundle — config overrides layered in the profile's `cordis.patch.yml` are hot-reloaded by DSH without a restart. **Caveat**: reloading the orchestrator plugin (e.g. editing its config row) aborts all running batches via its unload cleanup — do not touch orchestrator config while a batch is running.
 - **Source HMR**: DSH does not enable plugin source HMR on the web profile (`cordis-plugin-hmr` is disabled by default); source changes require `npm run build` followed by a **dsh web restart**.
 - **Batch recovery**: even after a restart, `.taskswarm/` disk state + checkpoints + lane branches persist; check `/orch-status` afterwards and resume/rerun failed lanes through the supervisor without losing completed work.
+- **Wave plan is fixed at batch start**: the wave structure (how many waves, which tasks in each) is persisted and never recomputed mid-flight — pause/resume, crash recovery, and single-lane reruns all continue within the original wave layout. Completed waves stay done, remaining tasks keep their original wave numbers, and the dashboard/dingo wave segmentation stays consistent.
 
 ## Notifications & Token Efficiency
 

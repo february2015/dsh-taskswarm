@@ -231,6 +231,7 @@ export class TaskSwarmEngine {
       scope,
       startedAt: new Date().toISOString(),
       waves: waves.waves.length,
+      wavePlan: waves.waves.map((wave) => wave.map((t) => t.id)),
       lanes: [],
     }
     let laneNumber = 0
@@ -375,6 +376,9 @@ export class TaskSwarmEngine {
     const lane: LaneState = {
       lane: existing?.lane ?? state.lanes.length + 1,
       taskId: task.id,
+      // 继承规划时的 wave 号（暂停/恢复/续跑时保持与原始 wave plan 一致，
+      // dingo 的 Wave 分段依赖 lane.wave）。
+      wave: existing?.wave ?? state.lanes.find((l) => l.taskId === task.id)?.wave,
       phase: 'running',
       startedAt: new Date().toISOString(),
       log: [`starting ${task.id}`],
@@ -659,14 +663,36 @@ export class TaskSwarmEngine {
     if (!state) return false
     if (state.phase !== 'running' && state.phase !== 'planning' && state.phase !== 'paused') return false
     if (this.active.has(state.id)) return false
-    // select() 默认排除已 done 任务（.DONE 标记）→ wave plan 只含剩余任务。
-    let selected = this.select(state.scope)
-    if (skipFailed) {
-      const failedIds = new Set(state.lanes.filter((l) => l.phase === 'failed').map((l) => l.taskId))
-      selected = selected.filter((t) => !failedIds.has(t.task.id))
+    // 2026-08-16：wave plan 是批次启动时定死的（持久化在 state.wavePlan），恢复时**原样复用**——
+    // 已完成 wave 的任务由 runLane 的 "merged 跳过" 处理，绝不中途重算 wave 结构
+    // （旧实现 select 排除 done 后重新 buildWaves，wave 数变化 + lane.wave 错位）。
+    let waves: WavePlan
+    if (state.wavePlan && state.wavePlan.length > 0) {
+      // 用持久化的原始 wave plan；任务仍从磁盘 scope 解析（保留完整任务包上下文）。
+      const discovered = scanTasks(this.config.tasksRoot, true)
+      const byId = new Map(discovered.map((d) => [d.task.id, d.task]))
+      waves = {
+        tasks: state.wavePlan.flat().map((id) => byId.get(id)).filter((t): t is NonNullable<typeof t> => !!t),
+        waves: state.wavePlan
+          .map((ids) => ids.map((id) => byId.get(id)).filter((t): t is NonNullable<typeof t> => !!t))
+          .filter((wave) => wave.length > 0),
+        unresolvedDeps: new Map(),
+      }
+      if (skipFailed) {
+        const failedIds = new Set(state.lanes.filter((l) => l.phase === 'failed').map((l) => l.taskId))
+        waves.waves = waves.waves.map((wave) => wave.filter((t) => !failedIds.has(t.id)))
+      }
+      if (waves.waves.length === 0) return false
+    } else {
+      // 兼容旧批次文件（无 wavePlan）：回退到重新计算。
+      let selected = this.select(state.scope)
+      if (skipFailed) {
+        const failedIds = new Set(state.lanes.filter((l) => l.phase === 'failed').map((l) => l.taskId))
+        selected = selected.filter((t) => !failedIds.has(t.task.id))
+      }
+      if (selected.length === 0) return false
+      waves = buildWaves(selected.map((t) => t.task))
     }
-    if (selected.length === 0) return false
-    const waves = buildWaves(selected.map((t) => t.task))
     const paths = worktreePaths(this.config.repoRoot, this.config.stateRoot)
     const ctx = this.makeRunContext(state.id, paths)
     this.active.set(state.id, ctx)

@@ -5,6 +5,29 @@
 格式遵循 [Keep a Changelog](https://keepachangelog.com/zh-CN/1.0.0/)；本项目使用
 [语义化版本](https://semver.org/lang/zh-CN/)。English version: [CHANGELOG.md](CHANGELOG.md)。
 
+## [0.2.31] - 2026-08-16
+
+### 修复
+
+- **波次计划在批次启动时固定，绝不在执行中重算** —— 此前暂停/恢复与崩溃恢复会对"剩余（未完成）
+  任务"重新 `buildWaves`，导致原规划 3 波的批次暂停后可能静默变成 2 波（已完成波的任务被排除出
+  重算）。现在 wave 结构在启动时持久化到 `BatchState.wavePlan`，恢复时**原样复用**；已完成 lane
+  由既有 "merged 跳过" 逻辑处理，剩余任务保留原始波次号。效果：
+  - 暂停 → 恢复保持原始波数与各 lane 的波次号；
+  - 崩溃恢复（新引擎实例）在原始波布局内继续；
+  - `lane.wave` 保持一致，dingo 的 Wave 分段后台计数随之正确。
+- `runLane` 现在把原始 `wave` 号带到续跑的 lane 上（此前重建 lane 对象时丢失）。
+- dashboard 适配器优先用持久化的 `state.wavePlan`（旧批次文件回退重算）。
+
+### 变更
+
+- README：补充"波次计划固定"行为说明（双语）。
+
+### 测试
+
+- 新增回归测试：暂停→恢复保持 3 波；abort→立刻 start 正常执行；从磁盘现场崩溃恢复保持原始
+  wave plan。全量 47/47。
+
 ## [0.2.30] - 2026-08-16
 
 ### 变更
@@ -364,6 +387,7 @@ homepage / repository / bugs 字段（npm 页面展示）。
 - 在真实 DSH 进程内验证：真实 LLM worker 并行运行（deepseek-v4-flash）、检查点提交、
   合并进 `taskswarm/orch`。
 
+[0.2.31]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.30...v0.2.31
 [0.2.30]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.29...v0.2.30
 [0.2.29]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.28...v0.2.29
 [0.2.28]: https://github.com/february2015/dsh-taskswarm/compare/v0.2.27...v0.2.28

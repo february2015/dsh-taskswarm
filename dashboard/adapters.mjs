@@ -121,7 +121,11 @@ export function buildDashboardState(options = {}) {
   const laneTaskIds = state.lanes.map((l) => l.taskId)
   const batchTasks = laneTaskIds.map((tid) => byTaskId.get(tid)?.task).filter(Boolean)
   const plan = buildWaves(batchTasks)
-  let wavePlan = plan.waves.map((wave) => wave.map((t) => t.id))
+  // 2026-08-16：优先用引擎持久化的 wave plan（恢复后 wave 结构与启动时一致，
+  // 与 dingo 读到的 lane.wave 对齐）；没有（旧批次）才回退到重算。
+  let wavePlan = Array.isArray(state.wavePlan) && state.wavePlan.length > 0
+    ? state.wavePlan
+    : plan.waves.map((wave) => wave.map((t) => t.id))
   // Degenerate fallback: lanes exist but nothing scanned (tasks root moved or
   // empty) — a single wave keeps the dashboard renderable.
   if (wavePlan.length === 0 && laneTaskIds.length > 0) wavePlan = [[...laneTaskIds]]
