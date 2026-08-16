@@ -9,6 +9,7 @@ import { scanTasks, scanTaskFailures, buildWaves } from '../lib/core/discover.js
 import { writeMailboxMessage, readInbox, ackMessage, sessionInboxDir, SUPERVISOR_SESSION } from '../lib/core/mailbox.js'
 import { runGit } from '../lib/core/git.js'
 import { ensureOrchWorktree, createLaneWorktree, worktreePaths } from '../lib/core/worktree.js'
+import { compactBatchStatus } from '../lib/orchestrator/supervisor.js'
 
 function tmp() {
   return mkdtempSync(join(tmpdir(), 'taskswarm-core-'))
@@ -454,4 +455,60 @@ test('checkPacketQuality flags silent dependency/File-Scope problems (feedback A
   assert.ok(!w3.some((w) => w.includes('File Scope')), 'clean File Scope is not flagged')
 
   rmSync(root, { recursive: true, force: true })
+})
+
+function statusState(lanes, phase, wavePlan) {
+  return {
+    id: 'B1',
+    phase,
+    tasksRoot: '/nonexistent-tasks',
+    wavePlan,
+    lanes: lanes.map(([taskId, p], i) => ({ taskId, phase: p, lane: i + 1 })),
+  }
+}
+
+test('compactBatchStatus: paused before wave 2 shows wave-1 failure, not a clean wave', () => {
+  // JM-406 场景：波次 1 有 failed lane，批次暂停于波次 2 前。"暂停于波次 2/3 前"
+  // 绝不能读成"波次 1 全部完成"——必须把波次 1 的失败明确标出来。
+  const state = statusState([['A', 'failed'], ['B', 'pending'], ['C', 'pending']], 'paused', [['A'], ['B'], ['C']])
+  const zh = compactBatchStatus(state, 'zh-CN')
+  assert.match(zh, /暂停于波次 2\/3 前/)
+  assert.match(zh, /波次 1 有失败任务/)
+  assert.match(zh, /已完成 0\/3/)
+  // 失败 lane 本身也必须列出来（不能被 current-wave 过滤掉）
+  assert.match(zh, /lane 1 \[失败\] A/)
+  const en = compactBatchStatus(state, 'en')
+  assert.match(en, /paused before wave 2\/3/)
+  assert.match(en, /wave 1 has 1 failed/)
+})
+
+test('compactBatchStatus: clean pause (wave merged) does not claim failure', () => {
+  const state = statusState([['A', 'merged'], ['B', 'pending'], ['C', 'pending']], 'paused', [['A'], ['B'], ['C']])
+  const zh = compactBatchStatus(state, 'zh-CN')
+  assert.match(zh, /暂停于波次 2\/3 前/)
+  assert.doesNotMatch(zh, /有失败任务/)
+  assert.match(zh, /已完成 1\/3/)
+  assert.match(zh, /lane 1 \[已合并\] A/)
+})
+
+test('compactBatchStatus: conflict lane in paused wave is surfaced too', () => {
+  const state = statusState([['A', 'conflict'], ['B', 'pending'], ['C', 'pending']], 'paused', [['A'], ['B'], ['C']])
+  const zh = compactBatchStatus(state, 'zh-CN')
+  assert.match(zh, /波次 1 有冲突待处置/)
+})
+
+test('compactBatchStatus: last wave failed -> paused after all waves, no bogus N+1', () => {
+  const state = statusState([['A', 'merged'], ['B', 'merged'], ['C', 'failed']], 'paused', [['A'], ['B'], ['C']])
+  const zh = compactBatchStatus(state, 'zh-CN')
+  assert.match(zh, /暂停于全部波次执行完后/)
+  assert.match(zh, /波次 3 有失败任务/)
+  assert.doesNotMatch(zh, /4\/3/)
+})
+
+test('compactBatchStatus: running state keeps wave index, no pause annotation', () => {
+  const state = statusState([['A', 'merged'], ['B', 'running'], ['C', 'pending']], 'running', [['A'], ['B'], ['C']])
+  const zh = compactBatchStatus(state, 'zh-CN')
+  assert.match(zh, /· 波次 2\/3/)
+  assert.doesNotMatch(zh, /暂停于/)
+  assert.match(zh, /lane 2 \[运行中\] B/)
 })

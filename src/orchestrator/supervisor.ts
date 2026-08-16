@@ -324,6 +324,10 @@ export function deleteLaneSessions(lanes: LaneState[]): { dirs: number; bytes: n
  * 兜底：lanes 存在但任务根目录扫不到时，全部塞进单波保持可读。
  */
 function recomputeWavePlan(state: BatchState): string[][] {
+  // 2026-08-17 修复：优先用引擎持久化的原始 wave plan（v0.2.31 起批次启动时定死）——
+  // 否则 paused + wave 内 failed 时会重算成错误的 wave 结构（如 3 波变 1 波），
+  // 且 currentWaveIndex 会误判"已推进到下一波"（JM-406 场景：pause 后显示波次 2）。
+  if (Array.isArray(state.wavePlan) && state.wavePlan.length > 0) return state.wavePlan
   const laneTaskIds = state.lanes.map((l) => l.taskId)
   const byTaskId = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d]))
   const batchTasks = laneTaskIds
@@ -410,15 +414,67 @@ export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'):
     failed: '失败', pending: '等待中', skipped: '已跳过',
   }
   const failedNote = failed > 0 ? (locale === 'zh-CN' ? `，${failed} 失败` : `, ${failed} failed`) : ''
+  // 2026-08-17 修复：paused 时明确"暂停于波次 N"（N = 下一个待执行波），而不是显示
+  // "波次 N+1" 让人误以为已推进——JM-406 场景（wave1 failed + pause）曾误导 supervisor。
+  // 但"暂停于波次 N 前"≠ 前面的波都成功了：必须检查已执行波里的 lane 是否都正常 merged
+  // （有 failed/conflict 就明确标注），避免把"波次 1 有失败"误读成"波次 1 全部完成"。
+  const paused = state.phase === 'paused'
+  let waveLabel: string
+  if (paused) {
+    // 暂停点 = 第一个还有未终结 lane（pending/running/review/conflict）的波；全部终结
+    // （最后波失败触发 pause）则没有"下一个波"——直接说明"已执行完全部波次"。
+    const laneByTask = new Map(state.lanes.map((l) => [l.taskId, l]))
+    const nextWave = wavePlan.findIndex((tids) => tids.some((tid) => {
+      const l = laneByTask.get(tid)
+      return !!l && l.phase !== 'merged' && l.phase !== 'failed' && l.phase !== 'skipped'
+    }))
+    const base = nextWave >= 0
+      ? (locale === 'zh-CN'
+          ? `，暂停于波次 ${nextWave + 1}/${wavePlan.length} 前`
+          : `, paused before wave ${nextWave + 1}/${wavePlan.length}`)
+      : (locale === 'zh-CN'
+          ? `，暂停于全部波次执行完后`
+          : `, paused after all waves executed`)
+    // 引擎在波次边界暂停：暂停点之前的波已执行完，之后的波全是 pending（不可能 failed）。
+    // 扫描全部波，凡有 failed/conflict lane 的波都列出——它们才是"没正常成功"的部分。
+    const abnormal: string[] = []
+    wavePlan.forEach((tids, i) => {
+      const waveLanes = tids.map((tid) => laneByTask.get(tid)).filter((l): l is LaneState => !!l)
+      const waveFailed = waveLanes.filter((l) => l.phase === 'failed').length
+      const waveConflict = waveLanes.filter((l) => l.phase === 'conflict').length
+      if (waveFailed === 0 && waveConflict === 0) return
+      if (locale === 'zh-CN') {
+        const bits: string[] = []
+        if (waveFailed > 0) bits.push(waveFailed === 1 ? '失败任务' : `${waveFailed} 个失败任务`)
+        if (waveConflict > 0) bits.push(waveConflict === 1 ? '冲突待处置' : `${waveConflict} 个冲突待处置`)
+        abnormal.push(`波次 ${i + 1} 有${bits.join('、')}`)
+      } else {
+        const bits: string[] = []
+        if (waveFailed > 0) bits.push(`${waveFailed} failed`)
+        if (waveConflict > 0) bits.push(`${waveConflict} conflict`)
+        abnormal.push(`wave ${i + 1} has ${bits.join(', ')}`)
+      }
+    })
+    const abnormalNote = abnormal.length > 0
+      ? (locale === 'zh-CN' ? `（${abnormal.join('；')}）` : ` (${abnormal.join('; ')})`)
+      : ''
+    waveLabel = base + abnormalNote
+  } else {
+    waveLabel = locale === 'zh-CN' ? `· 波次 ${waveIdx + 1}/${wavePlan.length}` : `· Wave ${waveIdx + 1}/${wavePlan.length}`
+  }
   const lines = [
     locale === 'zh-CN'
-      ? `批次 ${state.id} — ${state.phase}（已完成 ${done}/${state.lanes.length}${failedNote}）· 波次 ${waveIdx + 1}/${wavePlan.length}`
-      : `Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} done${failedNote}) · Wave ${waveIdx + 1}/${wavePlan.length}`,
+      ? `批次 ${state.id} — ${state.phase}（已完成 ${done}/${state.lanes.length}${failedNote}）${waveLabel}`
+      : `Batch ${state.id} — ${state.phase} (${done}/${state.lanes.length} done${failedNote})${waveLabel}`,
   ]
   const current = new Set(wavePlan[waveIdx] ?? [])
   const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const l of state.lanes) {
-    if (!current.has(l.taskId)) continue
+    // paused 时展示所有已终结的 lane（merged/failed/skipped）——引擎在波次边界暂停，
+    // 已执行波全部终结、下一波全 pending；只按 current（下一波）过滤会把暂停原因
+    // （failed/conflict lane）一起过滤掉，所以 paused 模式不按波过滤、只跳 pending。
+    if (paused && l.phase === 'pending') continue
+    if (!paused && !current.has(l.taskId)) continue
     const progress = laneProgress(l, taskFolders)
     const steps = l.worktree ? workerStepCountFromSessions(l.worktree) : 0
     const bits: string[] = []
