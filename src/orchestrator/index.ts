@@ -169,14 +169,14 @@ export function apply(ctx: Context, config: Config): void {
       batches: Array<{
         batchId: string
         phase: string
-        lanes: Array<{ lane: number; taskId: string; phase: string }>
+        lanes: Array<{ lane: number; taskId: string; phase: string; wave?: number }>
         ownerSessionId?: string
       }>
     } {
       const batches: Array<{
         batchId: string
         phase: string
-        lanes: Array<{ lane: number; taskId: string; phase: string }>
+        lanes: Array<{ lane: number; taskId: string; phase: string; wave?: number }>
         ownerSessionId?: string
       }> = []
       for (const ref of engines.values()) {

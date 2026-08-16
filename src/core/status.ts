@@ -17,6 +17,7 @@ export interface LaneState {
   lane: number
   taskId: string
   phase: LanePhase
+  wave?: number
   worktree?: string
   startedAt?: string
   endedAt?: string

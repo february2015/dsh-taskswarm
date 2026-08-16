@@ -146,13 +146,13 @@ export class TaskSwarmEngine {
   activeBatches(): Array<{
     batchId: string
     phase: string
-    lanes: Array<{ lane: number; taskId: string; phase: string }>
+    lanes: Array<{ lane: number; taskId: string; phase: string; wave?: number }>
     ownerSessionId?: string
   }> {
     const result: Array<{
       batchId: string
       phase: string
-      lanes: Array<{ lane: number; taskId: string; phase: string }>
+      lanes: Array<{ lane: number; taskId: string; phase: string; wave?: number }>
       ownerSessionId?: string
     }> = []
     for (const [batchId, ctx] of this.active) {
@@ -163,7 +163,7 @@ export class TaskSwarmEngine {
       result.push({
         batchId,
         phase: state.phase,
-        lanes: state.lanes.map((lane) => ({ lane: lane.lane, taskId: lane.taskId, phase: lane.phase })),
+        lanes: state.lanes.map((lane) => ({ lane: lane.lane, taskId: lane.taskId, phase: lane.phase, wave: lane.wave })),
         ownerSessionId: owner?.session?.id,
       })
     }
@@ -234,10 +234,10 @@ export class TaskSwarmEngine {
       lanes: [],
     }
     let laneNumber = 0
-    for (const wave of waves.waves) {
+    for (const [waveIndex, wave] of waves.waves.entries()) {
       for (const task of wave) {
         laneNumber++
-        state.lanes.push({ lane: laneNumber, taskId: task.id, phase: 'pending', log: [] })
+        state.lanes.push({ lane: laneNumber, taskId: task.id, phase: 'pending', wave: waveIndex + 1, log: [] })
       }
     }
     writeBatchState(state)
