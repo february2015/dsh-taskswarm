@@ -469,14 +469,16 @@ function statusState(lanes, phase, wavePlan) {
 
 test('compactBatchStatus: paused before wave 2 shows wave-1 failure, not a clean wave', () => {
   // JM-406 场景：波次 1 有 failed lane，批次暂停于波次 2 前。"暂停于波次 2/3 前"
-  // 绝不能读成"波次 1 全部完成"——必须把波次 1 的失败明确标出来。
+  // 绝不能读成"波次 1 全部完成"——头部必须把波次 1 的失败明确标出来。
+  // lane 列表只列当前波（W2 的 B）——失败由头部 abnormalNote 承担（display-current-wave）。
   const state = statusState([['A', 'failed'], ['B', 'pending'], ['C', 'pending']], 'paused', [['A'], ['B'], ['C']])
   const zh = compactBatchStatus(state, 'zh-CN')
   assert.match(zh, /暂停于波次 2\/3 前/)
   assert.match(zh, /波次 1 有失败任务/)
   assert.match(zh, /已完成 0\/3/)
-  // 失败 lane 本身也必须列出来（不能被 current-wave 过滤掉）
-  assert.match(zh, /lane 1 \[失败\] A/)
+  // 只列当前波 lane（B），不列 W1 的失败 lane A。
+  assert.match(zh, /lane 2 \[等待中\] B/)
+  assert.doesNotMatch(zh, /lane 1/)
   const en = compactBatchStatus(state, 'en')
   assert.match(en, /paused before wave 2\/3/)
   assert.match(en, /wave 1 has 1 failed/)
@@ -488,7 +490,9 @@ test('compactBatchStatus: clean pause (wave merged) does not claim failure', () 
   assert.match(zh, /暂停于波次 2\/3 前/)
   assert.doesNotMatch(zh, /有失败任务/)
   assert.match(zh, /已完成 1\/3/)
-  assert.match(zh, /lane 1 \[已合并\] A/)
+  // 只列当前波 lane（B），不列 W1 的已合并 lane A。
+  assert.match(zh, /lane 2 \[等待中\] B/)
+  assert.doesNotMatch(zh, /lane 1/)
 })
 
 test('compactBatchStatus: conflict lane in paused wave is surfaced too', () => {

@@ -479,11 +479,11 @@ export function compactBatchStatus(state: BatchState, locale: Locale = 'zh-CN'):
   const current = new Set(wavePlan[waveIdx] ?? [])
   const taskFolders = new Map(scanTasks(state.tasksRoot, true).map((d) => [d.task.id, d.task.folder]))
   for (const l of state.lanes) {
-    // paused 时展示所有已终结的 lane（merged/failed/skipped）——引擎在波次边界暂停，
-    // 已执行波全部终结、下一波全 pending；只按 current（下一波）过滤会把暂停原因
-    // （failed/conflict lane）一起过滤掉，所以 paused 模式不按波过滤、只跳 pending。
-    if (paused && l.phase === 'pending') continue
-    if (!paused && !current.has(l.taskId)) continue
+    // 2026-08-17（display-current-wave）：只列**当前波**的 lane（waveIdx = 正在执行的波，
+    // 暂停时 = 暂停点波/下一待执行波），不列全部 lane——全部列出太长（JM 反馈"新的这个
+    // 所有的 Lanner 都列出来也没必要"）。已执行波的失败/冲突信息由头部 waveLabel 的
+    // abnormalNote（"波次 N 有失败任务"）承担，不在 lane 列表重复。
+    if (!current.has(l.taskId)) continue
     const progress = laneProgress(l, taskFolders)
     const steps = l.worktree ? workerStepCountFromSessions(l.worktree) : 0
     const bits: string[] = []
@@ -987,6 +987,10 @@ export function startPeriodicSupervision(
   /** B2：progress-stall 检测——taskId → 上次 STATUS.md mtime（advance 会更新它）。
    *  会话活跃但 STATUS 长时间不动 → worker 可能在攒批，进度显示滞后。 */
   const statusMtimes = new Map<string, number>()
+  /** B2（2026-08-17）：taskId → 上次观测到的 worker step 数。step 每次工具调用 +1，
+   *  比"会话文件 mtime 在变"更可靠地反映"在干活"——worker 长时间思考/跑测试时不写
+   *  会话文件，但每次动作都会递增 step。step 在涨 → 不算攒批，不提示。 */
+  const stepCounts = new Map<string, number>()
   const progressStalledWarned = new Set<string>()
   /** 本批次是否已通知过 dashboard 链接（自动拉起成功时只通知一次）。 */
   let dashboardNotifiedBatch: string | null = null
@@ -1061,13 +1065,25 @@ export function startPeriodicSupervision(
           progressStalledWarned.delete(lane.taskId)
           continue
         }
-        // STATUS 未变：查会话是否活跃——活跃才提示攒批（不活跃由上面 stalled 管）。
+        // STATUS 未变：查 worker 是否真的在干活——step 数在涨 = 在干活（不提示攒批）。
+        // step 不可读（无会话）时回退到会话文件活动（mtime）。
+        // 2026-08-17（B2-step）：仅当 STATUS 不动 **且 step 也未增长**才提示攒批，
+        // 避免对 JM-411 这类大任务（12 步、每步多次工具调用）误报。
+        const stepNow = lane.worktree ? workerStepCountFromSessions(lane.worktree) : 0
+        const stepBefore = stepCounts.get(lane.taskId) ?? 0
+        if (stepNow > stepBefore) {
+          stepCounts.set(lane.taskId, stepNow)
+          progressStalledWarned.delete(lane.taskId)
+          continue
+        }
+        if (stepNow > 0) stepCounts.set(lane.taskId, stepNow) // 记录基线（首次观测）
         const activity = lane.worktree ? latestSessionActivity(lane.worktree) : 0
         if (activity > 0 && now - activity < stalledThresholdMs && !progressStalledWarned.has(lane.taskId)) {
           const staleFor = Math.round((now - mtime) / 60_000)
           if (staleFor >= Math.round(stalledThresholdMs / 60_000)) {
             progressStalledWarned.add(lane.taskId)
-            wake(`${m.progressStalled(lane.lane, lane.taskId, staleFor)}`)
+            // 提醒文案带上当前 step 数，让用户判断 worker 是否已推进。
+            wake(`${m.progressStalled(lane.lane, lane.taskId, staleFor)}（step ${stepNow} 无增长）`)
           }
         }
       }
